@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-#  攻击机 192.168.1.232 一键部署脚本（CentOS 7 / root）
+#  攻击机 192.168.3.153 一键部署脚本（CentOS 7 / root）
 # =============================================================================
 #  功能:
 #    1. 安装 python（优先 py3: python36/python3，回退 py2）/ curl / tcpdump
@@ -10,18 +10,18 @@
 #    5. 连通性自检：到靶机 80 / 5000 的探测（不发攻击流量）
 #
 #  用法（在攻击机上执行）:
-#    #   scp -r attacker/* root@192.168.1.232:/opt/ddos-setup/
+#    #   scp -r attacker/* root@192.168.3.153:/opt/ddos-setup/
 #    bash 2_setup_attacker.sh
 #
 #  可调环境变量:
-#    TARGET_IP=192.168.1.137   靶机 IP
+#    TARGET_IP=192.168.3.152   靶机 IP
 #    SKIP_PKG=1                跳过 yum/pip（离线环境）
 #    NO_FIREWALL_CHANGE=1      不改动 firewalld
 # =============================================================================
 set -e
 
 # ---------------------------- 参数区 -----------------------------------------
-TARGET_IP="${TARGET_IP:-192.168.1.137}"
+TARGET_IP="${TARGET_IP:-192.168.3.152}"
 SKIP_PKG="${SKIP_PKG:-0}"
 NO_FIREWALL_CHANGE="${NO_FIREWALL_CHANGE:-0}"
 
@@ -33,6 +33,12 @@ say()  { echo -e "\033[1;36m[*]\033[0m $*"; }
 ok()   { echo -e "\033[1;32m[+]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[!]\033[0m $*"; }
 die()  { echo -e "\033[1;31m[x]\033[0m $*"; exit 1; }
+
+# 靶机 IP 合法性：该值会写进 /etc/ddos/target 和 ddos-attack，非法值会让攻击脚本在运行时才失败
+echo "$TARGET_IP" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$' \
+    || die "TARGET_IP 非法: '$TARGET_IP'（需要 a.b.c.d）"
+printf '%s\n' "$TARGET_IP" | awk -F. '{for(i=1;i<=4;i++) if($i>255) exit 1}' \
+    || die "TARGET_IP 非法: '$TARGET_IP'（每段需 <=255）"
 
 # 选择 Python 解释器：优先 py3（CentOS7 为 python36），回退 py2（自带 python2/python）
 py_bin() {
@@ -107,7 +113,7 @@ if [ "$SKIP_PKG" != "1" ]; then
     ensure_pip "$PY" "$PY_MAJOR" || die "$PY 无 pip 模块（可安装 python2-pip/python36-pip 后重试）"
     if [ "$PY_MAJOR" = "3" ]; then
         "$PY" -m pip install -i "$PIP_MIRROR" --upgrade pip >/dev/null 2>&1 || true
-        "$PY" -m pip install -i "$PIP_MIRROR" scapy==2.4.5 requests paramiko \
+        "$PY" -m pip install -i "$PIP_MIRROR" scapy==2.4.5 requests==2.27.1 paramiko==2.10.4 \
             || die "pip 依赖安装失败"
     else
         # py2: 先升到最后一个支持 py2 的 pip，否则老 pip 不识别 python_requires 会装错版本
@@ -132,13 +138,22 @@ PY=${PY:-$(py_bin)}
 [ -n "$PY" ] || die "未找到可用的 Python（python36/python3/python2/python）"
 "$PY" -m py_compile "$APP_DIR/attacker.py" && ok "attacker.py 语法检查通过（$PY）"
 
-# 快捷命令：ddos-attack <mode> [其余参数...]
+# 靶机地址落地到 /etc/ddos/target（attacker.py 与 ddos-attack 运行时都读它；IP 变了只改此文件）
+install -d /etc/ddos
+printf '%s\n' "$TARGET_IP" > /etc/ddos/target
+echo "attacker" > /etc/ddzt-role
+ok "靶机地址: /etc/ddos/target = $TARGET_IP"
+
+# 快捷命令：ddos-attack <mode> [其余参数...]（--target 在运行时解析，不烧死 IP）
 cat > /usr/local/bin/ddos-attack <<EOF
 #!/bin/bash
 # 简写包装：ddos-attack <mode> [其余参数...]
 MODE=\${1:-mixed}
 [ \$# -gt 0 ] && shift
-exec $(command -v "$PY") $APP_DIR/attacker.py --mode "\$MODE" --target $TARGET_IP "\$@"
+# 靶机地址运行时解析：/etc/ddos/target 为空或缺失时回退部署时的默认值（文件内容由 net_sync 维护）
+T=\$(tr -d ' \\r\\n' < /etc/ddos/target 2>/dev/null || true)
+[ -n "\$T" ] || T=$TARGET_IP
+exec $(command -v "$PY") "$APP_DIR/attacker.py" --mode "\$MODE" --target "\$T" "\$@"
 EOF
 chmod 755 /usr/local/bin/ddos-attack
 ok "快捷命令: ddos-attack <syn|udp|http|multi-port|brute|mixed|dry-run> [参数]"
@@ -150,8 +165,9 @@ if ping -c 1 -W 1 "$TARGET_IP" >/dev/null 2>&1; then
 else
     warn "ping $TARGET_IP 不可达（若靶机禁 ping 可忽略）"
 fi
-if curl -s -m 3 -o /dev/null -w "%{http_code}" "http://$TARGET_IP/" | grep -q '^[0-9]'; then
-    ok "靶机 Nginx 80 端口可达"
+CODE=$(curl -s -m 3 -o /dev/null -w "%{http_code}" "http://$TARGET_IP/" 2>/dev/null || true)
+if [ -n "$CODE" ] && [ "$CODE" != "000" ]; then
+    ok "靶机 Nginx 80 端口可达（HTTP $CODE）"
 else
     warn "靶机 80 端口不可达，请确认 Nginx 已启动"
 fi
@@ -172,8 +188,8 @@ cat <<EOF
               --http-threads 20 --mp-rate 50 --brute-kinds ssh --duration 40
 
  注意：
-   - 攻击机默认在靶机 WHITELIST 中，只观测、不会被封。要演示真实全端口封禁，
-     请在靶机 /opt/ddos/agent.py 顶部 WHITELIST 删除 192.168.1.232 并重启服务。
+   - 攻击机默认在靶机白名单中（/etc/ddos/whitelist.txt），只观测、不会被封。要演示真实全端口封禁，
+     请在靶机 /etc/ddos/whitelist.txt 删掉本机 IP 那一行，再 systemctl restart ddos-agent。
    - 爆破/扫描会把本机真实 IP 封 60s；被封后 flood 结果不可信，务必按顺序执行。
 
 EOF

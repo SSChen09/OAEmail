@@ -5,9 +5,10 @@
   python tools/push_deploy.py <ip>            # 上传 deploy/ 并执行该主机对应脚本
   python tools/push_deploy.py <ip> --check    # 上传后仅执行校验（脚本 --check）
   python tools/push_deploy.py <ip> --upload   # 仅上传不执行
-  python tools/push_deploy.py 192.168.1.137 --oa    # 上传并部署 OA+邮件系统 (4_oa_mail_setup.sh)
+  python tools/push_deploy.py 192.168.3.152 --oa    # 上传并部署 OA+邮件系统 (4_oa_mail_setup.sh)
   python tools/push_deploy.py all             # 三台依次 上传+执行
 """
+import json
 import os
 import sys
 
@@ -19,16 +20,35 @@ DEPLOY_DIR = os.path.join(ROOT, "deploy")
 OA_DIR = os.path.join(ROOT, "oa")
 REMOTE_DIR = "/opt/deploy"
 OA_REMOTE_DIR = REMOTE_DIR + "/oa"
+ENV_FILE = os.path.join(ROOT, "netenv.json")
+
+ROLE_SCRIPT = {"server": "1_server_deps.sh", "client": "2_client_deps.sh",
+               "attacker": "3_attacker_deps.sh"}
 
 # 角色映射（配置.md）: IP -> 该主机需要执行的一键依赖脚本
 HOST_SCRIPT = {
-    "192.168.1.137": "1_server_deps.sh",    # 服务端: OA + 邮件 + DDoS 防御
-    "192.168.1.130": "2_client_deps.sh",    # 客户端: 浏览器访问 OA + 邮件
-    "192.168.1.232": "3_attacker_deps.sh",  # 攻击端/备用客户端: DDoS 攻击 + 同客户端
+    "192.168.3.152": "1_server_deps.sh",    # 服务端: OA + 邮件 + DDoS 防御
+    "192.168.3.155": "2_client_deps.sh",    # 客户端: 浏览器访问 OA + 邮件
+    "192.168.3.153": "3_attacker_deps.sh",  # 攻击端/备用客户端: DDoS 攻击 + 同客户端
 }
 # OA + 邮件系统部署脚本（仅服务端）
 OA_SCRIPT = "4_oa_mail_setup.sh"
-OA_HOST = "192.168.1.137"
+OA_HOST = "192.168.3.152"
+
+
+def script_for(ip):
+    """IP -> 部署脚本：先查静态表，再查 netenv.json 的角色（IP 变了也能对上）"""
+    if ip in HOST_SCRIPT:
+        return HOST_SCRIPT[ip]
+    try:
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
+            hosts = json.load(f).get("hosts", {})
+    except (OSError, ValueError):
+        return None
+    for role, addr in hosts.items():
+        if addr == ip:
+            return ROLE_SCRIPT.get(role)
+    return None
 
 TEXT_EXTS = (".sh", ".md", ".php", ".html", ".css", ".js", ".json", ".conf", ".txt")
 
@@ -54,14 +74,13 @@ def _upload_tree(sftp, local_dir, remote_dir):
         print("[upload]", remote)
 
 
-def upload(ip):
+def upload(ip, with_oa=None):
+    if with_oa is None:
+        with_oa = (ip == OA_HOST)
+    run(ip, "mkdir -p %s" % REMOTE_DIR)
     c = connect(ip)
     try:
         sftp = c.open_sftp()
-        try:
-            sftp.stat(REMOTE_DIR)
-        except IOError:
-            sftp.mkdir(REMOTE_DIR)
         for f in sorted(os.listdir(DEPLOY_DIR)):
             if not f.endswith((".sh", ".md")):
                 continue
@@ -71,19 +90,29 @@ def upload(ip):
             with sftp.open(REMOTE_DIR + "/" + f, "wb") as rf:
                 rf.write(data)
             print("[upload]", ip + ":" + REMOTE_DIR + "/" + f)
-        if os.path.isdir(OA_DIR):
+        if with_oa and os.path.isdir(OA_DIR):
             _upload_tree(sftp, OA_DIR, OA_REMOTE_DIR)
         sftp.close()
     finally:
         c.close()
-    run(ip, "chmod +x %s/*.sh" % REMOTE_DIR)
+    code, _out, err = run(ip, "chmod +x %s/*.sh" % REMOTE_DIR)
+    if code != 0:
+        print("[!] chmod 失败：%s" % err.strip())
+    return code == 0
 
 
 def run_script(ip, check_only, script=None):
-    script = script or HOST_SCRIPT[ip]
+    script = script or script_for(ip)
+    if not script:
+        print("[x] 未知主机 %s：不在 HOST_SCRIPT，也不在 netenv.json 里" % ip)
+        return 2
     cmd = "bash %s/%s%s" % (REMOTE_DIR, script, " --check" if check_only else "")
     print("[run]", ip, cmd)
-    code, out, err = run(ip, cmd, timeout=3600)
+    try:
+        code, out, err = run(ip, cmd, timeout=1800)
+    except Exception as e:  # noqa: BLE001 - 单台失败不应中断 all
+        print("[x] 执行异常：%r" % (e,))
+        return 1
     sys.stdout.write(out)
     if err.strip():
         sys.stderr.write("[stderr]\n" + err)
@@ -115,15 +144,22 @@ def main():
     failed = []
     for ip in ips:
         print("=" * 60)
-        print("HOST", ip, "ROLE-SCRIPT", HOST_SCRIPT[ip])
-        upload(ip)
+        print("HOST", ip, "ROLE-SCRIPT", script_for(ip) or "(未知)")
+        try:
+            ok = upload(ip)
+        except Exception as e:  # noqa: BLE001
+            print("[x] 上传失败：%r" % (e,))
+            ok = False
         if upload_only:
+            if not ok:
+                failed.append(ip)
             continue
-        code = run_script(ip, check_only)
+        code = run_script(ip, check_only) if ok else 1
         if code != 0:
             failed.append(ip)
     if failed:
-        sys.exit("FAILED hosts: " + ", ".join(failed))
+        print("[x] 失败主机：%s" % ", ".join(failed))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-#  客户端 192.168.1.130 一键安装系统依赖脚本（含校验）
+#  客户端 192.168.3.155 一键安装系统依赖脚本（含校验）
 #  依据: 配置.md —— 客户端职责: 浏览器访问 OA、发送邮件（邮件发送在 OA 系统中）
 #  系统: CentOS 7 / root
 # =============================================================================
@@ -17,14 +17,14 @@
 #    bash 2_client_deps.sh --check    # 仅校验（可重复执行）
 #
 #  可调环境变量:
-#    CLIENT_IP=192.168.1.130  SERVER_IP=192.168.1.137  MAIL_DOMAIN=ddzt.old
+#    CLIENT_IP=192.168.3.155  SERVER_IP=192.168.3.152  MAIL_DOMAIN=ddzt.old
 #  校验: 命令存在/版本/域名解析 + 对服务端的连通性检查（信息性），
 #        末尾输出 PASS/FAIL/WARN 汇总，存在 FAIL 时退出码非 0。
 # =============================================================================
 set -u
 
-CLIENT_IP="${CLIENT_IP:-192.168.1.130}"
-SERVER_IP="${SERVER_IP:-192.168.1.137}"
+CLIENT_IP="${CLIENT_IP:-192.168.3.155}"
+SERVER_IP="${SERVER_IP:-192.168.3.152}"
 MAIL_DOMAIN="${MAIL_DOMAIN:-ddzt.old}"
 OA_URL="http://$SERVER_IP/"
 CHECK_ONLY=0
@@ -96,18 +96,29 @@ if [ "$CHECK_ONLY" = "0" ]; then
     yum install -y thunderbird || warn "thunderbird 安装失败（可用 OA 网页邮箱替代）"
 
     say "===== [4/4] [可选] python3 + requests + [内网域名] /etc/hosts ====="
-    yum install -y python3 python3-pip >/dev/null 2>&1 \
-        || yum install -y python36 python36-pip >/dev/null 2>&1 \
+    yum install -y epel-release >/dev/null 2>&1 || true
+    yum install -y python36 python36-pip >/dev/null 2>&1 \
+        || yum install -y python3 python3-pip >/dev/null 2>&1 \
         || warn "python3 安装失败（不影响浏览器使用）"
     pip3 install -i https://pypi.tuna.tsinghua.edu.cn/simple requests >/dev/null 2>&1 \
         || pip3 install -i https://mirrors.aliyun.com/pypi/simple requests >/dev/null 2>&1 \
         || warn "requests 安装失败（不影响浏览器使用）"
+    # 先清掉四个域名的旧映射（服务端换 IP 后会残留旧地址），再统一写入当前 SERVER_IP
+    _hosts_tmp=$(mktemp)
+    if awk -v d1="$MAIL_DOMAIN" -v d2="mail.$MAIL_DOMAIN" \
+             -v d3="www.$MAIL_DOMAIN" -v d4="oa.$MAIL_DOMAIN" '
+        { keep=1
+          for (i=2; i<=NF; i++)
+              if ($i==d1 || $i==d2 || $i==d3 || $i==d4) keep=0
+          if (keep) print }
+    ' /etc/hosts > "$_hosts_tmp" && [ -s "$_hosts_tmp" ]; then
+        cat "$_hosts_tmp" > /etc/hosts
+    else
+        warn "整理 /etc/hosts 失败，保留原文件（可能残留旧域名映射）"
+    fi
+    rm -f "$_hosts_tmp"
     for d in "$MAIL_DOMAIN" "mail.$MAIL_DOMAIN" "www.$MAIL_DOMAIN" "oa.$MAIL_DOMAIN"; do
-        if grep -qE "[[:space:]]$d([[:space:]]|$)" /etc/hosts; then
-            ok "/etc/hosts 已含 $d"
-        else
-            echo "$SERVER_IP  $d" >> /etc/hosts && ok "写入 /etc/hosts: $SERVER_IP $d"
-        fi
+        echo "$SERVER_IP  $d" >> /etc/hosts && ok "写入 /etc/hosts: $SERVER_IP $d"
     done
 fi
 
@@ -149,9 +160,12 @@ fi
 
 say "-- [服务端连通性]（信息性，服务端部署后转 PASS）--"
 vinfo "ping $SERVER_IP 可达"       ping -c 1 -W 2 "$SERVER_IP"
-vinfo "OA Web 端口 80 可访问"      bash -c "curl -s -m 4 -o /dev/null -w '%{http_code}' '$OA_URL' | grep -qv '000'"
+vinfo "OA Web 端口 80 可访问"      bash -c "c=\$(curl -s -m 4 -o /dev/null -w '%{http_code}' '$OA_URL'); case \"\$c\" in 2[0-9][0-9]|3[0-9][0-9]) exit 0;; *) exit 1;; esac"
 vinfo "邮件 SMTP 端口 25 可访问"   bash -c "timeout 3 bash -c '</dev/tcp/$SERVER_IP/25'"
-vinfo "OA 域名 $MAIL_DOMAIN 可访问" bash -c "curl -s -m 4 -o /dev/null 'http://$MAIL_DOMAIN/'"
+vinfo "OA 域名 $MAIL_DOMAIN 可访问" bash -c "c=\$(curl -s -m 4 -o /dev/null -w '%{http_code}' 'http://$MAIL_DOMAIN/'); case \"\$c\" in 2[0-9][0-9]|3[0-9][0-9]) exit 0;; *) exit 1;; esac"
+
+# 角色标记：供 tools/net_sync.py 在 IP 变化后自动识别本机角色（勿删）
+[ -f /etc/ddzt-role ] || echo "client" > /etc/ddzt-role
 
 # =============================================================================
 #  三、汇总

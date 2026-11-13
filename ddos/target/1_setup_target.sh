@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-#  靶机 192.168.1.137 一键部署脚本（CentOS 7 / root）
+#  靶机 192.168.3.152 一键部署脚本（CentOS 7 / root）
 # =============================================================================
 #  功能:
 #    1. 安装 Nginx / SSH / FTP(可选 Redis) / tcpdump 等基础软件
@@ -13,12 +13,13 @@
 #
 #  用法（在靶机上执行）:
 #    # 拷贝整个 target/ 目录（含 index.html、nginx/、systemd/）到靶机，例如:
-#    #   scp -r target/* root@192.168.1.137:/opt/ddos-setup/
+#    #   scp -r target/* root@192.168.3.152:/opt/ddos-setup/
 #    bash 1_setup_target.sh
 #
 #  可调环境变量:
-#    ADMIN_IP=192.168.1.130    管理机（客户端）IP（自动加入 agent 白名单）
-#    SSR_IP=192.168.1.232      攻击机（攻击端）IP（默认也在白名单，观察真实封禁可注释）
+#    TARGET_IP=192.168.3.152   靶机自身 IP（写入 agent.py WHITELIST 与外部白名单）
+#    ADMIN_IP=192.168.3.155    管理机（客户端）IP（自动加入 agent 白名单）
+#    SSR_IP=192.168.3.153      攻击机（攻击端）IP（默认也在白名单，观察真实封禁可注释）
 #    WITH_REDIS=1              是否安装 redis（6379 爆破演示）
 #    SKIP_PKG=1                跳过 yum/pip 安装（离线环境）
 #    SKIP_NGINX=1              跳过 Nginx 配置修改
@@ -27,9 +28,9 @@
 set -e
 
 # ---------------------------- 参数区 -----------------------------------------
-TARGET_IP="192.168.1.137"
-ADMIN_IP="${ADMIN_IP:-192.168.1.130}"
-SSR_IP="${SSR_IP:-192.168.1.232}"
+TARGET_IP="${TARGET_IP:-192.168.3.152}"
+ADMIN_IP="${ADMIN_IP:-192.168.3.155}"
+SSR_IP="${SSR_IP:-192.168.3.153}"
 WITH_REDIS="${WITH_REDIS:-0}"
 SKIP_PKG="${SKIP_PKG:-0}"
 SKIP_NGINX="${SKIP_NGINX:-0}"
@@ -78,6 +79,15 @@ say "===== 靶机 DDoS 演示环境部署开始 ====="
 say "源目录: $SRC_DIR"
 say "管理机白名单: $ADMIN_IP    攻击机: $SSR_IP"
 
+# 复用公共自检库（common/ 随 target/ 一起上传时生效；缺失则跳过）
+if [ -f "$SRC_DIR/../common/4_verify_lib.sh" ]; then
+    . "$SRC_DIR/../common/4_verify_lib.sh"
+    collect_env
+    check_iptables || true
+else
+    warn "未找到 common/4_verify_lib.sh（跳过公共自检）"
+fi
+
 # ---------------------------- 1. 基础软件 ------------------------------------
 if [ "$SKIP_PKG" != "1" ]; then
     say "[1/7] 安装基础软件包"
@@ -93,10 +103,14 @@ if [ "$SKIP_PKG" != "1" ]; then
         yum install -y redis || warn "redis 安装失败"
     fi
 
-    systemctl enable nginx sshd vsftpd
-    systemctl start  nginx sshd vsftpd
+    # 逐个启停：vsftpd/redis 可能未装（SKIP_PKG 场景），不能因单个失败中断
+    for s in nginx sshd vsftpd; do
+        systemctl enable "$s" >/dev/null 2>&1 || warn "无法设置 $s 开机自启（可能未安装）"
+        systemctl start  "$s" >/dev/null 2>&1 || warn "$s 启动失败（可能未安装）"
+    done
     if [ "$WITH_REDIS" = "1" ]; then
-        systemctl enable redis; systemctl start redis
+        systemctl enable redis >/dev/null 2>&1 || true
+        systemctl start  redis >/dev/null 2>&1 || warn "redis 启动失败"
     fi
     ok "基础软件安装完成"
 else
@@ -104,13 +118,17 @@ else
 fi
 
 # ---------------------------- 2. 安全策略 ------------------------------------
-say "[2/7] 关闭 firewalld / SELinux，开放 FTP 匿名演示账户"
+say "[2/7] 关闭 firewalld / SELinux，关闭 FTP 匿名登录"
 systemctl stop firewalld  2>/dev/null || true
 systemctl disable firewalld 2>/dev/null || true
 setenforce 0 2>/dev/null || true
 sed -i 's/^SELINUX=.*/SELINUX=permissive/' /etc/selinux/config 2>/dev/null || true
-grep -q '^anonymous_enable' /etc/vsftpd/vsftpd.conf 2>/dev/null \
-    && sed -i 's/^anonymous_enable=.*/anonymous_enable=NO/' /etc/vsftpd/vsftpd.conf && systemctl restart vsftpd
+if [ -f /etc/vsftpd/vsftpd.conf ] && grep -q '^anonymous_enable' /etc/vsftpd/vsftpd.conf; then
+    sed -i 's/^anonymous_enable=.*/anonymous_enable=NO/' /etc/vsftpd/vsftpd.conf
+    systemctl restart vsftpd 2>/dev/null || warn "vsftpd 重启失败"
+else
+    warn "未找到 /etc/vsftpd/vsftpd.conf，跳过 FTP 匿名账户设置"
+fi
 ok "firewalld 已停止，SELinux permissive"
 
 # ---------------------------- 3. Python 依赖 ---------------------------------
@@ -125,13 +143,16 @@ if [ "$SKIP_PKG" != "1" ]; then
     ensure_pip "$PY" "$PY_MAJOR" || die "$PY 无 pip 模块（可安装 python2-pip/python36-pip 后重试）"
     if [ "$PY_MAJOR" = "3" ]; then
         "$PY" -m pip install -i "$PIP_MIRROR" --upgrade pip >/dev/null 2>&1 || true
+        # flask 2.0.3 必须钉住 Werkzeug/Jinja2：否则 pip 装到 Jinja2 3.1 会报 escape ImportError
         "$PY" -m pip install -i "$PIP_MIRROR" scapy==2.4.5 flask==2.0.3 \
+            Werkzeug==2.0.3 Jinja2==3.0.3 itsdangerous==2.0.1 click==8.0.4 MarkupSafe==2.0.2 \
             || die "pip 依赖安装失败"
     else
         # py2: 先升到最后一个支持 py2 的 pip，否则老 pip 不识别 python_requires 会装错版本
         "$PY" -m pip install -i "$PIP_MIRROR" "pip==20.3.4" >/dev/null 2>&1 \
             || warn "pip 升级到 20.3.4 失败，继续用现有 pip"
         "$PY" -m pip install -i "$PIP_MIRROR" scapy==2.4.5 flask==1.1.4 \
+            Werkzeug==1.0.1 Jinja2==2.11.3 itsdangerous==1.1.0 click==7.1.2 MarkupSafe==1.1.1 \
             || die "pip 依赖安装失败"
     fi
     "$PY" -c "import flask, scapy" >/dev/null 2>&1 \
@@ -143,8 +164,13 @@ fi
 
 # ---------------------------- 4. 账户与日志目录 ------------------------------
 say "[4/7] 创建演示账户 test/test 与日志目录"
-id test >/dev/null 2>&1 || useradd test
-echo 'test:123456' | chpasswd
+if id test >/dev/null 2>&1; then
+    ok "演示账户 test 已存在（不改口令，避免每次重跑重置）"
+else
+    useradd test
+    echo 'test:123456' | chpasswd
+    ok "演示账户: test / 123456"
+fi
 mkdir -p "$LOG_DIR" "$APP_DIR"
 chmod 755 "$LOG_DIR"
 [ -f "$LOG_DIR/blocks.jsonl" ] || : > "$LOG_DIR/blocks.jsonl"
@@ -155,7 +181,7 @@ if [ "$SKIP_NGINX" != "1" ]; then
     say "[5/7] 配置 Nginx ddos 日志格式"
     NGINX_CONF="/etc/nginx/nginx.conf"
     cp -n "$NGINX_CONF" "$NGINX_CONF.bak.ddos" 2>/dev/null || true
-    if grep -q 'log_format ddos' "$NGINX_CONF"; then
+    if grep -qE '^[[:space:]]*log_format[[:space:]]+ddos' "$NGINX_CONF"; then
         ok "已存在 log_format ddos，跳过"
     else
         # 在 http 配置块起始行的下一行插入片段内容（片段只含 http 级指令）
@@ -185,13 +211,54 @@ say "[6/7] 部署 agent.py / index.html 到 $APP_DIR"
 install -m 755 "$SRC_DIR/agent.py"   "$APP_DIR/agent.py"
 install -m 644 "$SRC_DIR/index.html" "$APP_DIR/index.html"
 mkdir -p "$APP_DIR/nginx"
-[ -f "$SRC_DIR/nginx/ddos.conf" ] && install -m 644 "$SRC_DIR/nginx/ddos.conf" "$APP_DIR/nginx/ddos.conf"
-
-# 白名单按部署参数落地（改 agent.py 顶部 WHITELIST 亦可）
-sed -i "s/\"192.168.1.130\"/\"$ADMIN_IP\"/" "$APP_DIR/agent.py"
-if [ -n "$SSR_IP" ]; then
-    sed -i "s/\"192.168.1.232\"/\"$SSR_IP\"/" "$APP_DIR/agent.py"
+if [ -f "$SRC_DIR/nginx/ddos.conf" ]; then
+    install -m 644 "$SRC_DIR/nginx/ddos.conf" "$APP_DIR/nginx/ddos.conf"
+else
+    warn "缺少 nginx/ddos.conf（已跳过日志格式配置，面板仍可用）"
 fi
+
+# 白名单参数合法性：非法 IP 会被原样写进 whitelist.txt / agent.py，之后再排查很费劲
+valid_ip() {
+    echo "$1" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || return 1
+    printf '%s\n' "$1" | awk -F. '{for(i=1;i<=4;i++) if($i>255) exit 1}'
+}
+for _v in TARGET_IP ADMIN_IP SSR_IP; do
+    _ip="${!_v}"
+    [ -n "$_ip" ] || continue
+    if ! valid_ip "$_ip"; then
+        warn "忽略非法 IP 参数: $_v=$_ip"
+        printf -v "$_v" '%s' ""
+    fi
+done
+[ -n "$TARGET_IP" ] || die "TARGET_IP 非法或为空"
+
+# 白名单按部署参数落地：整块重写 agent.py 的 WHITELIST 字面量（幂等，重复换 IP 不残留旧值）
+"$PY" - "$APP_DIR/agent.py" "$TARGET_IP" "$ADMIN_IP" "$SSR_IP" <<'PYEOF'
+import io, re, sys
+path, tgt, adm, ssr = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+ips = ["127.0.0.1", tgt, adm]
+if ssr:
+    ips.append(ssr)
+block = "WHITELIST = {\n" + "".join('    "%s",\n' % ip for ip in ips) + "}\n"
+src = io.open(path, "r", encoding="utf-8").read()
+new, n = re.subn(r"WHITELIST = \{[^}]*\}\n", block, src, count=1)
+if n:
+    io.open(path, "w", encoding="utf-8").write(new)
+    sys.stdout.write("[+] agent.py WHITELIST 已重写: %s\n" % ", ".join(ips))
+else:
+    sys.stderr.write("[!] 未找到 WHITELIST 字面量，跳过重写（外部白名单仍生效）\n")
+PYEOF
+
+# 外部白名单文件：IP/CIDR 变动只改这里 + 重启服务（agent.py 启动时自动加载）
+install -d /etc/ddos
+{
+    echo "# 由 1_setup_target.sh 生成；每行一个 IP 或 CIDR（支持 192.168.3.0/24）"
+    echo "# 改完执行: systemctl restart ddos-agent"
+    printf '%s\n' "$TARGET_IP" "$ADMIN_IP"
+    if [ -n "$SSR_IP" ]; then printf '%s\n' "$SSR_IP"; fi
+} > /etc/ddos/whitelist.txt
+echo "server" > /etc/ddzt-role
+ok "外部白名单: /etc/ddos/whitelist.txt（$TARGET_IP / $ADMIN_IP / ${SSR_IP:--}）"
 PY=${PY:-$(py_bin)}
 [ -n "$PY" ] || die "未找到可用的 Python（python36/python3/python2/python）"
 "$PY" -m py_compile "$APP_DIR/agent.py" && ok "agent.py 语法检查通过（$PY）"
@@ -201,6 +268,9 @@ if [ -f "$SRC_DIR/systemd/ddos-agent.service" ]; then
     install -m 644 "$SRC_DIR/systemd/ddos-agent.service" /etc/systemd/system/ddos-agent.service
     PY_ABS=$(command -v "$PY")
     sed -i "s#^ExecStart=[^ ]* #ExecStart=$PY_ABS #" /etc/systemd/system/ddos-agent.service
+    if ! grep -q "^ExecStart=$PY_ABS " /etc/systemd/system/ddos-agent.service; then
+        die "systemd 单元 ExecStart 修正失败：$PY_ABS"
+    fi
     systemctl daemon-reload
     systemctl enable ddos-agent
     ok "systemd 单元已安装（ExecStart=$PY_ABS）"
@@ -223,8 +293,8 @@ say "===== 部署完成 ====="
 cat <<EOF
 
  提示：
-   1) 管理机 $ADMIN_IP 必须在 agent 的 WHITELIST 中（本脚本已写入）。
-   2) 若攻击机 $SSR_IP 也需要被封禁，请编辑 $APP_DIR/agent.py 顶部 WHITELIST 删除该行，
+   1) 管理机 $ADMIN_IP 必须在 agent 白名单中（已写入 WHITELIST 与 /etc/ddos/whitelist.txt）。
+   2) 若攻击机 $SSR_IP 也需要被封禁，从 /etc/ddos/whitelist.txt 删掉该行，
       然后 systemctl restart ddos-agent。
    3) 常用命令：
         systemctl status ddos-agent

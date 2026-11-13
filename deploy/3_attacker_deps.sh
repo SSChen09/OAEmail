@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-#  攻击端/备用客户端 192.168.1.232 一键安装系统依赖脚本（含校验）
+#  攻击端/备用客户端 192.168.3.153 一键安装系统依赖脚本（含校验）
 #  依据: 配置.md —— 攻击端职责: DDoS 攻击服务器；其余同客户端一致
 #  系统: CentOS 7 / root
 # =============================================================================
@@ -16,15 +16,15 @@
 #    bash 3_attacker_deps.sh --check    # 仅校验（可重复执行）
 #
 #  可调环境变量:
-#    ATTACKER_IP=192.168.1.232  SERVER_IP=192.168.1.137  MAIL_DOMAIN=ddzt.old
+#    ATTACKER_IP=192.168.3.153  SERVER_IP=192.168.3.152  MAIL_DOMAIN=ddzt.old
 #  校验: 命令存在/版本/python 模块导入/域名解析 + 服务端连通性（信息性），
 #        末尾输出 PASS/FAIL/WARN 汇总，存在 FAIL 时退出码非 0。
 #  安全: 攻击脚本仅限隔离内网演练，只允许指向 $SERVER_IP，严禁指向网关/公网。
 # =============================================================================
 set -u
 
-ATTACKER_IP="${ATTACKER_IP:-192.168.1.232}"
-SERVER_IP="${SERVER_IP:-192.168.1.137}"
+ATTACKER_IP="${ATTACKER_IP:-192.168.3.153}"
+SERVER_IP="${SERVER_IP:-192.168.3.152}"
 MAIL_DOMAIN="${MAIL_DOMAIN:-ddzt.old}"
 PIP_INDEX="${PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 PIP_INDEX2="https://mirrors.aliyun.com/pypi/simple"
@@ -107,12 +107,22 @@ if [ "$CHECK_ONLY" = "0" ]; then
     yum install -y thunderbird || warn "thunderbird 安装失败（可用 OA 网页邮箱替代）"
 
     say "===== [5/5] [内网域名] 写入 /etc/hosts（纯内网无公网 DNS）====="
+    # 先清掉四个域名的旧映射（服务端换 IP 后会残留旧地址），再统一写入当前 SERVER_IP
+    _hosts_tmp=$(mktemp)
+    if awk -v d1="$MAIL_DOMAIN" -v d2="mail.$MAIL_DOMAIN" \
+             -v d3="www.$MAIL_DOMAIN" -v d4="oa.$MAIL_DOMAIN" '
+        { keep=1
+          for (i=2; i<=NF; i++)
+              if ($i==d1 || $i==d2 || $i==d3 || $i==d4) keep=0
+          if (keep) print }
+    ' /etc/hosts > "$_hosts_tmp" && [ -s "$_hosts_tmp" ]; then
+        cat "$_hosts_tmp" > /etc/hosts
+    else
+        warn "整理 /etc/hosts 失败，保留原文件（可能残留旧域名映射）"
+    fi
+    rm -f "$_hosts_tmp"
     for d in "$MAIL_DOMAIN" "mail.$MAIL_DOMAIN" "www.$MAIL_DOMAIN" "oa.$MAIL_DOMAIN"; do
-        if grep -qE "[[:space:]]$d([[:space:]]|$)" /etc/hosts; then
-            ok "/etc/hosts 已含 $d"
-        else
-            echo "$SERVER_IP  $d" >> /etc/hosts && ok "写入 /etc/hosts: $SERVER_IP $d"
-        fi
+        echo "$SERVER_IP  $d" >> /etc/hosts && ok "写入 /etc/hosts: $SERVER_IP $d"
     done
 
     say "===== [附加] 防火墙/SELinux（演示环境；NO_FIREWALL_CHANGE=1 可跳过）====="
@@ -142,7 +152,7 @@ vcmd "pip3 可用" pip3 --version
 vcmd "scapy 可导入"  python3 -c "import scapy"
 vcmd "requests 可导入" python3 -c "import requests"
 vcmd "paramiko 可导入" python3 -c "import paramiko"
-vcmd "scapy 可发包(原始套接字权限)" python3 -c "from scapy.all import IP; assert IP()"
+vcmd "原始套接字权限(scapy 发包前提)" python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW); s.close()"
 
 say "-- [DDoS 攻击] 攻击工具 --"
 vcmd "hping3 可用" hping3 -v
@@ -184,8 +194,11 @@ fi
 
 say "-- [服务端连通性]（信息性，服务端部署后转 PASS）--"
 vinfo "ping $SERVER_IP 可达"      ping -c 1 -W 2 "$SERVER_IP"
-vinfo "服务端 Web 端口 80 可访问" bash -c "curl -s -m 4 -o /dev/null -w '%{http_code}' 'http://$SERVER_IP/' | grep -qv '000'"
+vinfo "服务端 Web 端口 80 可访问" bash -c "c=\$(curl -s -m 4 -o /dev/null -w '%{http_code}' 'http://$SERVER_IP/'); case \"\$c\" in 2[0-9][0-9]|3[0-9][0-9]) exit 0;; *) exit 1;; esac"
 vinfo "邮件 SMTP 端口 25 可访问"  bash -c "timeout 3 bash -c '</dev/tcp/$SERVER_IP/25'"
+
+# 角色标记：供 tools/net_sync.py 在 IP 变化后自动识别本机角色（勿删）
+[ -f /etc/ddzt-role ] || echo "attacker" > /etc/ddzt-role
 
 # =============================================================================
 #  三、汇总

@@ -1,0 +1,20 @@
+{
+  "_说明": "角色 -> 当前 IP 的唯一事实来源。IP 变化后执行 python tools/net_sync.py --apply 自动刷新本文件与仓库配置",
+  "subnet": "192.168.3.0/24",
+  "hosts": {
+    "server": "192.168.3.152",
+    "client": "192.168.3.155",
+    "attacker": "192.168.3.153"
+  },
+  "ssh": {
+    "user": "root",
+    "password": "root",
+    "port": 22
+  },
+  "domains": [
+    "ddzt.old",
+    "mail.ddzt.old",
+    "www.ddzt.old",
+    "oa.ddzt.old"
+  ]
+}

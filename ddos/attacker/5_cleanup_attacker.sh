@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-#  攻击机 192.168.1.232 一键关闭与清理脚本（CentOS 7 / root）
+#  攻击机 192.168.3.153 一键关闭与清理脚本（CentOS 7 / root）
 # =============================================================================
 #  功能:
 #    默认        : 1) 停止全部 attacker.py 进程（含 multiprocessing 的 syn/udp/
@@ -107,6 +107,7 @@ if [ "$PURGE" = "1" ]; then
     if [ "$DRY" = "1" ]; then
         [ -d "$APP_DIR" ]      && dry "rm -rf $APP_DIR"
         [ -f "$WRAPPER" ]      && dry "rm -f $WRAPPER"
+        dry "rm -rf /etc/ddos /etc/ddzt-role（靶机地址与角色标记）"
         find /root/test_ddos -name '__pycache__' -type d 2>/dev/null | while read -r d; do
             dry "rm -rf $d"
         done
@@ -116,6 +117,12 @@ if [ "$PURGE" = "1" ]; then
         fi
         if [ -f "$WRAPPER" ]; then
             rm -f "$WRAPPER" && ok "已删除快捷命令 $WRAPPER"
+        fi
+        if [ -d /etc/ddos ]; then
+            rm -rf /etc/ddos && ok "已删除 /etc/ddos（target）"
+        fi
+        if [ -f /etc/ddzt-role ]; then
+            rm -f /etc/ddzt-role && ok "已删除角色标记 /etc/ddzt-role"
         fi
         find /root/test_ddos -name '__pycache__' -type d 2>/dev/null | while read -r d; do
             rm -rf "$d" && ok "已删除 $d"

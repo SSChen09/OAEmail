@@ -6,7 +6,7 @@
 ==============================================================================
  部署位置 : /opt/ddos/agent.py   （root 运行）
  运行方式 : python3 /opt/ddos/agent.py            （或 systemctl start ddos-agent）
- 面板地址 : http://192.168.1.137:5000/            （面板 HTML 独立为 index.html，
+ 面板地址 : http://192.168.3.152:5000/            （面板 HTML 独立为 index.html，
                                                    与本文件同目录或 PANEL_FILE 指定的路径）
 
  线程模型:
@@ -24,11 +24,18 @@ import io
 import json
 import os
 import re
+import shlex
+import signal
 import subprocess
 import sys
 import threading
 import time
 from collections import deque, defaultdict
+
+try:                                   # Python 3 标准库；py2 无此模块则只支持精确 IP
+    import ipaddress
+except ImportError:                    # pragma: no cover
+    ipaddress = None
 
 try:
     from flask import Flask, Response, jsonify, request, send_file
@@ -77,11 +84,39 @@ EVENT_MAX = 200                   # 事件环形缓冲长度
 # ---------------- 白名单（永不被封） ----------------
 WHITELIST = {
     "127.0.0.1",        # 本机
-    "192.168.1.137",    # 靶机自身（服务端）
-    "192.168.1.130",    # 管理机（客户端，浏览器访问面板）
-    "192.168.1.232",    # 攻击机（攻击端/备用客户端；管理员可临时注释此行以观察真实封禁效果）
+    "192.168.3.152",    # 靶机自身（服务端）
+    "192.168.3.155",    # 管理机（客户端，浏览器访问面板）
+    "192.168.3.153",    # 攻击机（攻击端/备用客户端；管理员可临时注释此行以观察真实封禁效果）
 }
 WHITELIST = {ip.strip() for ip in WHITELIST if ip.strip()}
+
+# ---------------- 外部白名单文件（IP 变动只改这里，不改代码） ----------------
+# 每行一个 IP 或 CIDR，# 开头为注释；由 1_setup_target.sh 生成，tools/net_sync.py 维护
+WHITELIST_FILE = os.environ.get("DDOS_WHITELIST_FILE", "/etc/ddos/whitelist.txt")
+WHITELIST_NETS = []
+
+
+def load_whitelist_file(path):
+    nets = []
+    try:
+        with io.open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.split("#", 1)[0].strip()
+                if not s:
+                    continue
+                if ipaddress is None:
+                    WHITELIST.add(s)
+                    continue
+                try:
+                    nets.append(ipaddress.ip_network(s, strict=False))
+                except ValueError:
+                    sys.stderr.write("[!] 忽略非法白名单项: %r\n" % s)
+    except (IOError, OSError):
+        pass
+    return nets
+
+
+WHITELIST_NETS = load_whitelist_file(WHITELIST_FILE)
 
 # ---------------- 用户字典（secure 日志解析用） ----------------
 USER_RE = re.compile(r"Failed password for (?:invalid user )?(\S+) from (\d+\.\d+\.\d+\.\d+)")
@@ -115,6 +150,9 @@ STOP = threading.Event()
 SNIFF_NEED = []          # 当前工作集，用于打印日志
 SNIFF_DPORTS = set()     # sniff 线程用：需要收包的端口集合（由主循环维护）
 
+# 抓包按秒聚合（每包落盘会把磁盘写满：800pps 约 6GB/天）
+PKT_BUCKET = {"t": 0, "tcp": 0, "udp": 0}
+
 
 # ============================================================================
 #                          工具函数
@@ -130,9 +168,13 @@ def hhmmss(ts=None):
 
 def say(msg):
     """跨版本安全输出：print(..., flush=True) 仅在 Python3.3+ 可用，
-    CentOS7 的 python2 会把它当元组解析而报 SyntaxError，故统一先写再 flush。"""
-    sys.stdout.write(str(msg) + "\n")
-    sys.stdout.flush()
+    CentOS7 的 python2 会把它当元组解析而报 SyntaxError，故统一先写再 flush。
+    编码兜底：LANG=C 时中文会 UnicodeEncodeError，绝不能让它打死 blocker 线程。"""
+    try:
+        sys.stdout.write(str(msg) + "\n")
+        sys.stdout.flush()
+    except Exception:
+        pass
 
 
 def add_event(msg, level="info"):
@@ -176,6 +218,19 @@ def traffic_count(kind, n=1, t=None):
         b[kind] = b.get(kind, 0) + n
 
 
+def _pkt_bucket(ts, proto):
+    """抓包按秒聚合：每秒最多写一行 packets.jsonl（调用方须已持 LOCK）"""
+    sec = int(ts)
+    if PKT_BUCKET["t"] != sec:
+        if PKT_BUCKET["t"]:
+            log_jsonl("packets", {"ts": hhmmss(PKT_BUCKET["t"]),
+                                  "tcp": PKT_BUCKET["tcp"], "udp": PKT_BUCKET["udp"]})
+        PKT_BUCKET["t"] = sec
+        PKT_BUCKET["tcp"] = 0
+        PKT_BUCKET["udp"] = 0
+    PKT_BUCKET[proto] = PKT_BUCKET.get(proto, 0) + 1
+
+
 def log_jsonl(name, obj):
     """追加一行 JSON 到 /var/log/ddos/<name>.jsonl，失败静默"""
     try:
@@ -199,25 +254,60 @@ def run_cmd(args):
             out, _ = p.communicate(timeout=10)
         except TypeError:                      # py2: 不认识 timeout 关键字
             out, _ = p.communicate()
+        except subprocess.TimeoutExpired:      # 超时后必须 kill，否则子进程可能持 xtables 锁
+            p.kill()
+            p.communicate()
+            return -1, "timeout: %s" % " ".join(args)
         return p.returncode, (out or b"").decode("utf-8", "ignore")
     except Exception as e:
         return -1, str(e)
 
 
 def is_whitelisted(ip):
-    return ip in WHITELIST
+    if ip in WHITELIST:
+        return True
+    if ipaddress is None:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip)
+    except (ValueError, TypeError):
+        return False
+    for net in WHITELIST_NETS:
+        try:
+            if addr in net:
+                return True
+        except TypeError:                 # IPv6 地址 vs IPv4Network（py3.6 会抛）
+            continue
+    return False
 
 
 def detect_iface():
-    """自动探测默认路由出口网卡（以 ip route get 攻击机地址 为准）"""
+    """自动探测默认路由出口网卡：白名单对端 -> 8.8.8.8 -> 默认路由 -> 第一块非 lo 网卡。
+    注意必须跳过 dev lo：白名单里含本机 IP，`ip route get 本机IP` 会返回 lo，
+    若采用会让 scapy 嗅探回环网卡，L4 检测静默失效。"""
     global IFACE
     if IFACE:
         return IFACE
-    for probe in ("192.168.1.232", "8.8.8.8"):
+    probes = [ip for ip in sorted(WHITELIST) if not ip.startswith("127.")]
+    probes.append("8.8.8.8")
+    for probe in probes:
         rc, out = run_cmd(["ip", "route", "get", probe])
         if rc == 0:
             m = re.search(r"dev\s+(\S+)", out)
-            if m:
+            if m and m.group(1) != "lo":
+                IFACE = m.group(1)
+                return IFACE
+    rc, out = run_cmd(["ip", "route", "show", "default"])
+    if rc == 0:
+        m = re.search(r"dev\s+(\S+)", out)
+        if m and m.group(1) != "lo":
+            IFACE = m.group(1)
+            return IFACE
+    rc, out = run_cmd(["ip", "-o", "-4", "addr", "show"])
+    if rc == 0:
+        for line in out.splitlines():
+            m = re.search(r"^\d+:\s+(\S+)\s+inet\s", line)
+            if m and m.group(1) != "lo":
                 IFACE = m.group(1)
                 return IFACE
     IFACE = "eth0"
@@ -247,7 +337,9 @@ def add_rule(args):
 
 
 def del_rule(args):
-    rc, _ = run_cmd(["iptables"] + args)
+    rc, out = run_cmd(["iptables"] + args)
+    if rc != 0:
+        print("[!] iptables 删除失败: %s -> %s" % (" ".join(args), out.strip()))
     return rc == 0
 
 
@@ -258,9 +350,15 @@ def del_args(args):
     return ["-D"] + args[1:]
 
 
-def apply_block(ip, full):
+def apply_block(ip, full, kind=""):
     """执行封禁，返回实际生效的规则列表（用于解封）"""
     rules = []
+    if kind == "brute":
+        # 爆破只封 22/tcp：全端口 DROP 会把敲错密码的自己人连同面板一起封死
+        args = iptables_rule_args(ip, 22, "tcp")
+        if add_rule(args):
+            rules.append(args)
+        return rules, False
     if full:
         # 全端口 DROP 一条即可（含 SSH），只用于判定扫描/爆破的源
         if add_rule(iptables_full_rule_args(ip)):
@@ -278,7 +376,7 @@ def apply_block(ip, full):
 
 
 def release_block(ip, reason, full, why="", log=True):
-    """解封：按记录的规则逐条删除；若记录缺失则按端口兜底删除"""
+    """解封：按记录的规则逐条删除；删除失败则保留记录，下一轮自动重试"""
     with LOCK:
         info = blocked.get(ip)
     rules = info.get("rules") if info else None
@@ -289,37 +387,56 @@ def release_block(ip, reason, full, why="", log=True):
         rules = [iptables_rule_args(ip, SYN_DPORT, "tcp"),
                  iptables_rule_args(ip, UDP_DPORT, "udp"),
                  iptables_full_rule_args(ip)]
-    for args in rules:
-        del_rule(del_args(args))
+    failed = [args for args in rules if not del_rule(del_args(args))]
     with LOCK:
-        blocked.pop(ip, None)
+        if info is not None and failed:
+            info["retries"] = info.get("retries", 0) + 1
+            blocked[ip] = info
+        else:
+            blocked.pop(ip, None)
+    if failed:
+        if info is None or info.get("retries", 0) % 5 == 1:
+            add_event("解封 %s 失败 %d 条规则（保留记录，稍后重试）" % (ip, len(failed)), "warn")
+        return False
     if log:
         log_jsonl("blocks", {"ts": hhmmss(), "action": "unblock", "ip": ip,
                              "reason": reason, "full": bool(full), "why": why})
         add_event("解封 %s（%s）" % (ip, why or reason), "ok")
+    return True
 
 
 def cleanup_rules():
-    """启动清理：删除所有含 DDoS_BLOCK 注释的 INPUT 规则（兼容 -A / -I）"""
+    """启动清理：删除所有含 DDoS_BLOCK 注释的 INPUT 规则（兼容 -A / -I）
+    注意 iptables -S 输出的 comment 带引号，必须用 shlex 拆，
+    否则 -D 参数里残留引号，规则永远删不掉（重启自愈失效）。"""
     global blocked
     rc, out = run_cmd(["iptables", "-S", "INPUT"])
     if rc != 0:
         print("[!] 读取 iptables 失败: %s" % out.strip())
         return 0
     n = 0
+    n_fail = 0
     for line in out.splitlines():
         if BLOCK_TAG not in line:
             continue
-        if line.startswith("-A INPUT") or line.startswith("-I INPUT"):
-            # -A/-I -> -D，按规则规格删除
-            args = ["-D"] + line.split()[1:]
-        else:
+        if not (line.startswith("-A INPUT") or line.startswith("-I INPUT")):
             continue
-        if del_rule(args):
+        try:
+            parts = shlex.split(line)
+        except ValueError:
+            parts = line.split()
+        if not parts:
+            continue
+        parts[0] = "-D"                     # -A/-I -> -D，按规则规格删除
+        if del_rule(parts):
             n += 1
+        else:
+            n_fail += 1
     with LOCK:
-        blocked = {}
-    print("[*] 启动清理：删除残留 %s 规则 %d 条" % (BLOCK_TAG, n))
+        if not n_fail:                      # 有残留不能假装清空，否则失去追踪
+            blocked = {}
+    print("[*] 启动清理：删除残留 %s 规则 %d 条%s"
+          % (BLOCK_TAG, n, ("，失败 %d 条（见上方错误）" % n_fail) if n_fail else ""))
     return n
 
 
@@ -341,19 +458,21 @@ def sniff_worker():
         return
 
     conf.sniff_promisc = 1
-    bpf = ("(tcp and (port %d or port 22)) or (udp and port %d)" % (SYN_DPORT, UDP_DPORT))
+    # 只抓 TCP SYN + 全部 UDP：端口扫描/端口分布需要任意目的端口，
+    # 原过滤器只放行 80/22/53，导致 SCAN_PORT_TH 永远不可能触发。
+    # 注意 libpcap 语法的比较运算用单个 "="（"==" 会直接报语法错误，抓包线程起不来）。
+    # 只抓「纯 SYN」：带 ACK 的 SYN-ACK 是本机对 flood 的回应，若一并统计，
+    # 本机 IP 会因为成千上万个随机源端口被误判成「端口扫描」（实测 ports=1821）。
+    bpf = "udp or (tcp and (tcp[tcpflags] & (tcp-syn|tcp-ack) = tcp-syn))"
     add_event("抓包线程启动 iface=%s filter=%s" % (detect_iface(), bpf))
 
     # 每次都新建一次 sniff，便于周期性重建（CentOS7 + libpcap 关闭缓冲较慢；
     # 如需实时性更好，可在 conf 中关闭 buffered mode）
     def _cb(pkt):
         try:
-            if IP in pkt:
-                src = pkt[IP].src
-            elif IPv6 in pkt:
-                src = pkt[IPv6].src
-            else:
-                return
+            if IP not in pkt:
+                return                      # 只统计 IPv4：IPv6 源无法用 IPv4 iptables 封禁
+            src = pkt[IP].src
             ts = now()
             if TCP in pkt and pkt[TCP].dport is not None:
                 dport = int(pkt[TCP].dport)
@@ -361,27 +480,28 @@ def sniff_worker():
                 is_syn = bool((int(flags) & 0x02) and not (int(flags) & 0x10))
                 with LOCK:
                     port_cnt[dport].append(ts)
+                    prune(port_cnt[dport], WINDOW * 2)
                     src_ports[src][dport].append(ts)
+                    prune(src_ports[src][dport], WINDOW * 2)
                     if dport == SYN_DPORT and is_syn:
                         l4[src].append(ts)
                         traffic_count("syn", 1, ts)
                     else:
                         traffic_count("other", 1, ts)
-                    # 端口扫描只看 SYN
-                    if is_syn:
-                        prune(src_ports[src][dport], WINDOW * 2)
-                log_jsonl("packets", {"ts": hhmmss(ts), "src": src, "proto": "tcp", "dport": dport})
+                    _pkt_bucket(ts, "tcp")
             elif UDP in pkt and pkt[UDP].dport is not None:
                 dport = int(pkt[UDP].dport)
                 with LOCK:
                     port_cnt[dport].append(ts)
+                    prune(port_cnt[dport], WINDOW * 2)
                     src_ports[src][dport].append(ts)
+                    prune(src_ports[src][dport], WINDOW * 2)
                     if dport == UDP_DPORT:
                         udp[src].append(ts)
                         traffic_count("udp", 1, ts)
                     else:
                         traffic_count("other", 1, ts)
-                log_jsonl("packets", {"ts": hhmmss(ts), "src": src, "proto": "udp", "dport": dport})
+                    _pkt_bucket(ts, "udp")
         except Exception:
             pass
 
@@ -559,11 +679,40 @@ def collect_candidates():
     return cands
 
 
+def housekeeping():
+    """每轮清理窗口外数据；独立于 AUTO_BLOCK 执行（--no-auto 时也不能无限增长）"""
+    t = now()
+    lo5 = t - WINDOW * 2
+    lo60 = t - BRUTE_WINDOW * 2
+    with LOCK:
+        for mp, lo in ((l4, lo5), (udp, lo5), (http, lo5), (brute, lo60)):
+            for k, dq in list(mp.items()):
+                while dq and dq[0] < lo:
+                    dq.popleft()
+                if not dq:
+                    del mp[k]
+        for dport, dq in list(port_cnt.items()):
+            while dq and dq[0] < lo5:
+                dq.popleft()
+            if not dq:
+                del port_cnt[dport]
+        for src, pmap in list(src_ports.items()):
+            for dport, dq in list(pmap.items()):
+                while dq and dq[0] < lo5:
+                    dq.popleft()
+                if not dq:
+                    del pmap[dport]
+            if not pmap:
+                del src_ports[src]
+
+
 def blocker_worker():
     add_event("Blocker 线程启动（自动屏蔽默认 %s）" % ("开启" if AUTO_BLOCK else "关闭"))
+    full_warn_at = [0.0]
     while not STOP.is_set():
         try:
             t = now()
+            housekeeping()
 
             # ---- 1) 到期自动解封 ----
             expired = []
@@ -593,11 +742,13 @@ def blocker_worker():
                             continue
                     with LOCK:
                         if len(blocked) >= MAX_BLOCKED:
-                            add_event("封禁表已满（%d），跳过 %s" % (MAX_BLOCKED, src), "warn")
-                            break
+                            if t - full_warn_at[0] > 60:
+                                full_warn_at[0] = t
+                                add_event("封禁表已满（%d），新来源暂不封禁" % MAX_BLOCKED, "warn")
+                            continue
                     if new_cnt >= MAX_NEW_PER_ROUND:
                         break
-                    rules, full_ = apply_block(src, full)
+                    rules, full_ = apply_block(src, full, kind)
                     if not rules:
                         continue
                     until = now() + BLOCK_TTL
@@ -737,6 +888,14 @@ def index():
         return Response(html, mimetype="text/html")
 
 
+@app.before_request
+def _json_only_for_write():
+    """写操作只接受 application/json：挡住跨站表单（CSRF）直接解封/关自动屏蔽"""
+    if request.method == "POST" and not request.is_json:
+        return jsonify({"ok": False, "msg": "POST 需要 application/json"}), 415
+    return None
+
+
 @app.route("/api/stats")
 def api_stats():
     return jsonify(build_stats())
@@ -744,7 +903,7 @@ def api_stats():
 
 @app.route("/api/unblock", methods=["POST"])
 def api_unblock():
-    data = request.get_json(silent=True) or request.form or {}
+    data = request.get_json(silent=True) or {}
     ip = (data.get("ip") or "").strip()
     if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
         return jsonify({"ok": False, "msg": "IP 格式不正确"}), 400
@@ -752,17 +911,24 @@ def api_unblock():
         info = blocked.get(ip)
     if not info:
         return jsonify({"ok": False, "msg": "%s 当前未被封禁" % ip}), 404
-    release_block(ip, info["reason"], info["full"], why="面板手动解封")
+    ok = release_block(ip, info["reason"], info["full"], why="面板手动解封")
+    if not ok:
+        return jsonify({"ok": False, "msg": "解封 %s 失败，规则可能已被删除，请查看日志" % ip}), 500
     return jsonify({"ok": True, "msg": "已解封 %s" % ip})
 
 
 @app.route("/api/auto", methods=["POST"])
 def api_auto():
     global AUTO_BLOCK
-    data = request.get_json(silent=True) or request.form or {}
+    data = request.get_json(silent=True) or {}
     val = data.get("enabled", None)
-    if isinstance(val, str):
-        val = val.lower() in ("1", "true", "on", "yes")
+    if val is None:
+        return jsonify({"ok": False, "msg": "缺少 enabled 参数"}), 400
+    if not isinstance(val, bool):
+        if hasattr(val, "lower"):                  # py2 的 unicode / py3 的 str
+            val = val.lower() in ("1", "true", "on", "yes")
+        else:
+            val = bool(val)
     with LOCK:
         AUTO_BLOCK = bool(val)
     add_event("自动屏蔽已%s" % ("开启" if AUTO_BLOCK else "关闭"),
@@ -806,10 +972,24 @@ def parse_args():
     return p.parse_args()
 
 
+def _ensure_utf8_stdout():
+    """LANG=C 时中文写 stdout 会 UnicodeEncodeError；换成 utf-8/replace 输出"""
+    enc = (getattr(sys.stdout, "encoding", "") or "").lower()
+    if enc in ("utf-8", "utf8"):
+        return
+    if hasattr(sys.stdout, "buffer"):
+        try:
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                          errors="replace", line_buffering=True)
+        except Exception:
+            pass
+
+
 def main():
     global IFACE, LISTEN_PORT, SYN_RATE_TH, UDP_RATE_TH, HTTP_RATE_TH
     global SCAN_PORT_TH, BRUTE_TH, BLOCK_TTL, MAX_BLOCKED, AUTO_BLOCK, PANEL_FILE
 
+    _ensure_utf8_stdout()
     args = parse_args()
     IFACE = args.iface or detect_iface()
     LISTEN_PORT = args.port
@@ -833,6 +1013,8 @@ def main():
     print("  面板     : http://%s:%d/  (文件: %s)" % (LISTEN_HOST, LISTEN_PORT, PANEL_FILE))
     print("  日志目录 : %s" % LOG_DIR)
     print("  白名单   : %s" % sorted(WHITELIST))
+    if WHITELIST_NETS:
+        print("  白名单网段: %s  (来自 %s)" % (sorted(str(n) for n in WHITELIST_NETS), WHITELIST_FILE))
     print("  阈值     : SYN>%s pps, UDP>%s pps, HTTP>%s rps, 扫描>%s 端口, SSH>%s 失败/60s"
           % (SYN_RATE_TH, UDP_RATE_TH, HTTP_RATE_TH, SCAN_PORT_TH, BRUTE_TH))
     print("  封禁     : TTL=%ss, 上限=%d, 每轮最多 %d 个新源" % (BLOCK_TTL, MAX_BLOCKED, MAX_NEW_PER_ROUND))
@@ -844,6 +1026,15 @@ def main():
 
     # 记录本次启动
     add_event("agent 启动，AUTO_BLOCK=%s" % AUTO_BLOCK)
+
+    def _on_term(signum, frame):
+        STOP.set()
+        raise KeyboardInterrupt
+
+    try:
+        signal.signal(signal.SIGTERM, _on_term)
+    except Exception:
+        pass
 
     threads = []
     for target, name in ((sniff_worker, "sniff"), (nginx_worker, "nginx"),

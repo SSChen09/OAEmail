@@ -5,7 +5,7 @@
   python tools/ssh_run.py <ip> run  "<命令>"            # 执行远程命令，打印 stdout/stderr/exit
   python tools/ssh_run.py <ip> put  <本地文件> <远程路径> # SFTP 上传
   python tools/ssh_run.py <ip> putd <本地目录>  <远程目录> # 递归上传目录
-  python tools/ssh_run.py probe 192.168.1.130 192.168.1.137 ...  # 批量探测系统信息
+  python tools/ssh_run.py probe 192.168.3.155 192.168.3.152 ...  # 批量探测系统信息
 """
 import os
 import sys
@@ -36,11 +36,31 @@ def run(ip, cmd, timeout=600):
         c.close()
 
 
+TEXT_EXTS = (".sh", ".py", ".md", ".txt", ".conf", ".html", ".json",
+             ".service", ".ini", ".cfg", ".yml", ".yaml", ".php", ".css", ".js")
+
+
+def _sftp_put(sftp, local, remote):
+    """文本文件 CRLF->LF（否则远端 bash 报 $'\\r'）；先传临时名再改名，避免半截文件"""
+    with open(local, "rb") as fh:
+        data = fh.read()
+    if local.lower().endswith(TEXT_EXTS):
+        data = data.replace(b"\r\n", b"\n")
+    tmp = remote + ".dsh-tmp"
+    with sftp.open(tmp, "wb") as rf:
+        rf.write(data)
+    try:
+        sftp.remove(remote)
+    except IOError:
+        pass
+    sftp.rename(tmp, remote)
+
+
 def put(ip, local, remote):
     c = connect(ip)
     try:
         sftp = c.open_sftp()
-        sftp.put(local, remote)
+        _sftp_put(sftp, local, remote)
         sftp.close()
     finally:
         c.close()
@@ -63,7 +83,7 @@ def put_dir(ip, local, remote):
                 except IOError:
                     sftp.mkdir(rdir + "/" + d)
             for f in files:
-                sftp.put(os.path.join(root, f), rdir + "/" + f)
+                _sftp_put(sftp, os.path.join(root, f), rdir + "/" + f)
         sftp.close()
     finally:
         c.close()
@@ -83,6 +103,7 @@ PROBE = (
 
 def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "probe":
+        failed = 0
         for ip in sys.argv[2:]:
             print("########", ip)
             try:
@@ -91,16 +112,26 @@ def main():
                 if err.strip():
                     print("[stderr]", err.strip())
                 print("[exit]", code)
+                if code != 0:
+                    failed += 1
             except Exception as e:
                 print("[connect-fail]", repr(e))
+                failed += 1
+        if failed:
+            sys.exit(1)
         return
+    if len(sys.argv) < 4:
+        sys.exit("用法: ssh_run.py <ip> run|put|putd <参数...>  或  ssh_run.py probe <ip>...")
     ip, action = sys.argv[1], sys.argv[2]
+    if action in ("put", "putd") and len(sys.argv) < 5:
+        sys.exit("用法: ssh_run.py <ip> %s <本地路径> <远端路径>" % action)
     if action == "run":
         code, out, err = run(ip, sys.argv[3])
         sys.stdout.write(out)
         if err.strip():
             sys.stderr.write("[stderr]\n" + err)
         print("[exit]", code)
+        sys.exit(code)
     elif action == "put":
         put(ip, sys.argv[3], sys.argv[4])
         print("uploaded", sys.argv[3], "->", ip + ":" + sys.argv[4])

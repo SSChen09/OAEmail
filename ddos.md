@@ -10,7 +10,7 @@
 - 目标：模拟多向量异常流量/请求、多端口攻击、常用端口爆破；服务端完成日志记录、流量统计、自动过滤屏蔽、可视化监控面板。
 - 命名建议：**“隔离内网多向量 DDoS/端口扫描/爆破模拟与 Python 自动过滤审计”**。
 - 硬性约束：
-  - 只打服务端 `192.168.1.137`，不碰网关/公网。
+  - 只打服务端 `192.168.3.152`，不碰网关/公网。
   - 不用 `hping3 --flood`、`--rand-source`；Scapy 伪造源 IP 仅限内网短时。
   - 实验前对两台 VM 快照；每轮短时低强度。
   - 屏蔽规则不得影响 SSH 22（除“全端口封禁”策略外，且全端口封禁只针对被判定扫描/爆破的源）。
@@ -21,13 +21,13 @@
 
 | 角色 | IP | 系统 | 说明 |
 |---|---|---|---|
-| 服务端 | 192.168.1.137 | CentOS 7 | Nginx + SSH + FTP + 可选 Redis；运行 agent + 面板 |
-| 攻击端（兼备用客户端） | 192.168.1.232 | CentOS 7 | 运行 attacker.py（Scapy 需 root）；也可浏览器访问面板 |
-| 客户端 | 192.168.1.130 | 待定 | 浏览器访问面板，需加入 WHITELIST |
+| 服务端 | 192.168.3.152 | CentOS 7 | Nginx + SSH + FTP + 可选 Redis；运行 agent + 面板 |
+| 攻击端（兼备用客户端） | 192.168.3.153 | CentOS 7 | 运行 attacker.py（Scapy 需 root）；也可浏览器访问面板 |
+| 客户端 | 192.168.3.155 | 待定 | 浏览器访问面板，需加入 WHITELIST |
 
 > 角色对照（与已生成脚本注释一致）：服务端=靶机（被攻击方，运行 agent + 面板），攻击端=攻击机（运行 attacker.py，兼备用客户端，也可浏览器查看面板），客户端=管理机（浏览器查看面板）。
 
-网卡名以 `ip route get 192.168.1.232` 为准，默认按 `eth0` 配置。
+网卡名以 `ip route get 192.168.3.153` 为准，默认按 `eth0` 配置。
 
 ### 服务端软件
 ```bash
@@ -93,16 +93,16 @@ events             = deque(maxlen=200)
 | UDP Flood | 单源 53 端口 UDP > `UDP_RATE_TH=80` pps | tcp/80 + udp/53 | `UDP flood N/s` |
 | HTTP Flood | 单源 HTTP > `HTTP_RATE_TH=20` req/s | tcp/80 + udp/53 | `HTTP flood N/s` |
 | 端口扫描 | 单源 5s 内不同端口数 > `SCAN_PORT_TH=10` | **全端口 DROP** | `port scan N ports` |
-| SSH 爆破 | 单源 60s SSH 失败 > `BRUTE_TH=5` | **全端口 DROP** | `SSH brute N/60s` |
+| SSH 爆破 | 单源 60s SSH 失败 > `BRUTE_TH=5` | **仅 DROP tcp/22** | `SSH brute N/60s` |
 
-其他参数：`BLOCK_TTL=60s`（到期自动解封）、`MAX_BLOCKED=200`、每轮最多处理 20 个新源、`WHITELIST={"127.0.0.1","192.168.1.137","192.168.1.130","192.168.1.232"}`（服务端自身 + 客户端 + 攻击端/备用客户端）、`AUTO_BLOCK=True` 可面板切换。
+其他参数：`BLOCK_TTL=60s`（到期自动解封）、`MAX_BLOCKED=200`、每轮最多处理 20 个新源、`WHITELIST={"127.0.0.1","192.168.3.152","192.168.3.155","192.168.3.153"}`（服务端自身 + 客户端 + 攻击端/备用客户端）、`AUTO_BLOCK=True` 可面板切换。
 
 ### 3.4 过滤屏蔽实现
 - 通过 `subprocess` 调 `iptables -I INPUT 1 ...`，规则带 `-m comment --comment DDoS_BLOCK` 便于清理。
 - 普通封禁规则：
   - `-s IP -p tcp --dport 80 -m comment --comment DDoS_BLOCK -j DROP`
   - `-s IP -p udp --dport 53 -m comment --comment DDoS_BLOCK -j DROP`
-- 全端口封禁规则：`-s IP -m comment --comment DDoS_BLOCK -j DROP`
+- 全端口封禁规则：`-s IP -m comment --comment DDoS_BLOCK -j DROP`（仅用于**端口扫描**源；爆破源只封 `tcp/22`，避免把攻击机 22 端口一起封死）
 - 解封按记录的 rules 逐条 `-D`。
 - 启动清理：遍历 `iptables -S INPUT`，删除含 `DDoS_BLOCK` 的 `-A` 规则。
 
@@ -145,7 +145,7 @@ events             = deque(maxlen=200)
 3. 三列表：端口分布（port/rate）、扫描/多端口来源（ip/ports/blocked）、SSH 爆破失败（ip/fails/blocked）。
 4. 被屏蔽 IP 表：ip/原因/是否全端口/剩余秒/解封按钮。
 5. 最近事件表：时间/事件。
-深色主题，表格带边框，`blocked` 用红色标识。
+与 OA 一致的浅色主题（深蓝侧栏 + 白卡片），顶部统计卡展示总速率/活跃来源/封禁数/自动屏蔽状态，`blocked` 用红色徽标标识；经 OA `/ddos/?embed=1` 内嵌时隐藏侧栏，只保留状态栏与数据区。
 
 ---
 
@@ -153,7 +153,7 @@ events             = deque(maxlen=200)
 
 ### 4.1 参数
 ```
---target        默认 192.168.1.137
+--target        默认 192.168.3.152
 --mode          syn | udp | http | multi-port | brute | mixed（默认 mixed）
 --port          默认 80
 --ports         默认常用端口列表（见下）
@@ -174,9 +174,9 @@ events             = deque(maxlen=200)
 |---|---|---|
 | syn | Scapy `IP(src=RandIP())/TCP(flags="S")` 批量 20 包 | 伪造随机 |
 | udp | Scapy `IP(src=RandIP())/UDP(dport=53)/Raw` 批量 20 包 | 伪造随机 |
-| http | requests 多线程 GET，伪造 `X-Forwarded-For`、`User-Agent: ddos-test`，timeout=1 | 真实 .137 |
+| http | requests 多线程 GET，伪造 `X-Forwarded-For`、`User-Agent: ddos-test`，timeout=1 | 真实（攻击机源 IP） |
 | multi-port | Scapy 遍历 ports 逐个发 SYN，按 `mp-rate` 限速 | 伪造随机 |
-| brute | 见 4.3 | 真实 .137 |
+| brute | 见 4.3 | 真实（攻击机源 IP） |
 
 并发：syn/udp/multi-port/brute 用 `multiprocessing.Process`；http 用 `threading.Thread`。统一 `multiprocessing.Event` 停止，`duration` 后 `stop.set()` 并 join。
 
@@ -193,19 +193,20 @@ events             = deque(maxlen=200)
 
 ## 5. 运行与验证流程
 
-1. 服务端启动：`python3 /opt/ddos/agent.py`，客户端浏览器开 `http://192.168.1.137:5000`。
+1. 服务端启动：`python3 /opt/ddos/agent.py`，客户端浏览器开 `http://192.168.3.152:5000`
+   （OA 部署后从 OA 左侧「🛡️ 安全防护」进入，或 `http://ddzt.old/ddos/`，见 ddos/README「面板已接入 OA」）。
 2. **防护关闭基线**：面板关自动屏蔽，依次跑：
    - 多端口：`--mode multi-port --mp-rate 50 --duration 20`
    - 爆破：`--mode brute --brute-kinds ssh,ftp,redis,telnet --duration 40`
    - 混合：`--mode mixed --syn-procs 4 --syn-rate 200 --udp-procs 2 --udp-rate 200 --http-threads 20 --mp-rate 50 --brute-kinds ssh --duration 40`
    - 记录：端口分布、扫描端口数、SSH 失败数、各来源速率、连接数、CPU。
 3. **防护开启**：面板开自动屏蔽，重跑同样命令。
-   - 期望：扫描/爆破源进入“被屏蔽 IP”（全端口），flood 伪造源被普通封禁；速率回落；`blocks.jsonl` 有 block/unblock 记录；`iptables -S INPUT | grep DDoS_BLOCK` 可见规则。
+   - 期望：扫描源进入“被屏蔽 IP”（全端口）、爆破源进“被屏蔽 IP”（仅 22），flood 伪造源被普通封禁；速率回落；`blocks.jsonl` 有 block/unblock 记录；`iptables -S INPUT | grep DDoS_BLOCK` 可见规则。
 4. 手动解封：面板按钮或
    ```bash
-   curl -X POST http://192.168.1.137:5000/api/unblock -H 'Content-Type: application/json' -d '{"ip":"192.168.1.232"}'
+   curl -X POST http://192.168.3.152:5000/api/unblock -H 'Content-Type: application/json' -d '{"ip":"192.168.3.153"}'
    ```
-5. 顺序建议：**先测爆破/扫描（真实 IP，会被全端口封），再测伪造源 flood**，避免攻击端先被封后无法继续。
+5. 顺序建议：**先测爆破/扫描（真实 IP；扫描源会被全端口封 60s），再测伪造源 flood**，避免攻击端先被封后无法继续。
 
 ---
 
@@ -215,7 +216,7 @@ events             = deque(maxlen=200)
 - HTTP 层必须真实握手，只能伪造 `X-Forwarded-For`；面板来源统计以 `remote_addr` 为准。
 - 伪造源多时可能触发 `MAX_BLOCKED=200` 上限；可缩短 `BLOCK_TTL` 或调高阈值。
 - 爆破是真实认证，`test` 账户用于演示，勿用生产账户；真实环境会触发账户锁定。
-- 全端口封禁会阻断该源所有流量（含 SSH），仅对判定扫描/爆破的源使用。
+- 全端口封禁会阻断该源所有流量（含 SSH），只对判定为**端口扫描**的源使用；爆破源只封 22。
 - 客户端 IP 必须加入 `WHITELIST`，防止面板访问被自封。
 
 ---

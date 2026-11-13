@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-#  攻击机 192.168.1.232 源 IP 别名管理脚本（CentOS 7 / root）
+#  攻击机 192.168.3.153 源 IP 别名管理脚本（CentOS 7 / root）
 # =============================================================================
 #  功能:
 #    add <IPs>   把真实源 IP 添加到网卡（临时，重启失效；--persist 持久化）
@@ -8,28 +8,28 @@
 #    list        列出网卡 IPv4 地址
 #
 #  用法（在攻击机上执行）:
-#    bash add_ips.sh add 192.168.1.233-240             # 临时添加 .233 ~ .240
-#    bash add_ips.sh add --persist 192.168.1.233-234   # 持久化（写 ifcfg 别名）
-#    bash add_ips.sh del 192.168.1.233-240
+#    bash add_ips.sh add 192.168.3.233-240             # 临时添加 .233 ~ .240
+#    bash add_ips.sh add --persist 192.168.3.233-234   # 持久化（写 ifcfg 别名）
+#    bash add_ips.sh del 192.168.3.233-240
 #    bash add_ips.sh list
 #
 #  IPs 参数: 逗号/空格分隔，元素可为单 IP 或范围
-#    范围写法: 192.168.1.233-240  或  192.168.1.233-192.168.1.240（含两端）
+#    范围写法: 192.168.3.233-240  或  192.168.3.233-192.168.3.240（含两端）
 #
 #  选项:
-#    -i <网卡>   指定网卡（默认按 ip route get 192.168.1.137 自动探测）
+#    -i <网卡>   指定网卡（默认按 ip route get 192.168.3.152 自动探测）
 #    --persist   add: 写 /etc/sysconfig/network-scripts/ifcfg-<网卡>:<n>
 #                del: 同时删除对应 ifcfg 别名文件
 #
 #  配合 attacker.py 使用（多真实源 IP 模拟）:
-#    bash add_ips.sh add 192.168.1.233-240
-#    python3 attacker.py --mode mixed --src-range 192.168.1.233-240 --duration 30
+#    bash add_ips.sh add 192.168.3.233-240
+#    python3 attacker.py --mode mixed --src-range 192.168.3.233-240 --duration 30
 #  注意: 持久化删除/添加不影响当前网络连接，重启后才完全一致；网卡别名请
 #        使用与主 IP 同网段的空闲地址，勿与 130/115 冲突。
 # =============================================================================
 set -u
 
-PROBE_DST="192.168.1.137"     # 探测出口网卡用的目的地址（靶机）
+PROBE_DST="192.168.3.152"     # 探测出口网卡用的目的地址（靶机）
 NIC=""
 PERSIST=0
 
@@ -114,7 +114,14 @@ expand_spec() {
 
 detect_nic() {
     if [ -z "$NIC" ]; then
+        # 优先按到靶机的路由探测；靶机 IP 变了/未配置时回退默认路由、再回退首块非 lo 网卡
         NIC=$(ip route get "$PROBE_DST" 2>/dev/null | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -1)
+        if [ -z "$NIC" ]; then
+            NIC=$(ip route show default 2>/dev/null | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -1)
+        fi
+        if [ -z "$NIC" ]; then
+            NIC=$(ip -o -4 addr show 2>/dev/null | awk '$2 != "lo" {print $2; exit}')
+        fi
         [ -n "$NIC" ] || die "探测出口网卡失败，请用 -i <网卡> 指定"
     fi
     ip link show "$NIC" >/dev/null 2>&1 || die "网卡不存在: $NIC"
@@ -139,7 +146,7 @@ fi
 
 detect_nic
 PREFIX=$(detect_prefix)
-[ ${#SPECS[@]} -gt 0 ] || die "缺少 IP 参数（如 192.168.1.233-240）"
+[ ${#SPECS[@]} -gt 0 ] || die "缺少 IP 参数（如 192.168.3.233-240）"
 
 IPS=()
 for s in "${SPECS[@]}"; do
@@ -152,19 +159,24 @@ done
 
 say "网卡=$NIC  前缀=/$PREFIX  共 ${#IPS[@]} 个 IP  persist=$PERSIST"
 
+# 地址是否已绑定在该网卡上（按 "IP/" 前缀精确匹配，避免 192.168.3.1 命中 192.168.3.10）
+addr_bound() {
+    ip -o -4 addr show dev "$NIC" | awk -v p="$1/" 'index($4, p) == 1 { found = 1 } END { exit(found ? 0 : 1) }'
+}
+
 # ---------------------------- add / del -------------------------------------
 added=0; skipped=0; removed=0
 for ip in "${IPS[@]}"; do
     if [ "$CMD" = "add" ]; then
-        if ip -o -4 addr show dev "$NIC" | awk '{print $4}' | grep -q "^${ip}/"; then
+        if addr_bound "$ip"; then
             warn "$ip 已绑定，跳过"
             skipped=$((skipped + 1))
-        else
-            ip addr add "$ip/$PREFIX" dev "$NIC" 2>/dev/null \
-                || die "添加失败: $ip（是否与现有地址冲突？）"
-            ok "已添加 $ip/$PREFIX -> $NIC"
-            added=$((added + 1))
+            continue                      # 已存在的地址不要再写一份 ifcfg 别名
         fi
+        ip addr add "$ip/$PREFIX" dev "$NIC" 2>/dev/null \
+            || die "添加失败: $ip（是否与现有地址冲突？）"
+        ok "已添加 $ip/$PREFIX -> $NIC"
+        added=$((added + 1))
         if [ "$PERSIST" = "1" ]; then
             IFDIR="/etc/sysconfig/network-scripts"
             n=1
@@ -178,7 +190,7 @@ EOF
             ok "持久化: $IFDIR/ifcfg-$NIC:$n"
         fi
     else  # del
-        if ip -o -4 addr show dev "$NIC" | awk '{print $4}' | grep -q "^${ip}/"; then
+        if addr_bound "$ip"; then
             ip addr del "$ip/$PREFIX" dev "$NIC" 2>/dev/null \
                 || ip addr del "$ip" dev "$NIC" 2>/dev/null \
                 || die "删除失败: $ip"
@@ -190,7 +202,7 @@ EOF
         if [ "$PERSIST" = "1" ]; then
             for f in /etc/sysconfig/network-scripts/ifcfg-"$NIC":*; do
                 [ -e "$f" ] || continue
-                if grep -q "^IPADDR=$ip$" "$f" 2>/dev/null; then
+                if awk -v want="IPADDR=$ip" '$0 == want { found = 1 } END { exit(found ? 0 : 1) }' "$f"; then
                     rm -f "$f"
                     ok "删除持久化: $f"
                 fi

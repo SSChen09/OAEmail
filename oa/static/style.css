@@ -206,6 +206,10 @@ ul { list-style: none; }
 .topbar-right { display: flex; align-items: center; gap: 16px; }
 .topbar-user { color: var(--text-2); font-size: 13px; }
 .topbar-user strong { color: var(--text); }
+.role-tag { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; line-height: 18px; vertical-align: 1px; }
+.role-admin { background: #eef1fe; color: #4f6ef7; border: 1px solid #dbe2ff; }
+.role-user { background: #f1f3f9; color: #727a9e; border: 1px solid #e3e7f2; }
+.readonly-hint { margin-left: 10px; font-size: 12px; font-weight: 400; color: var(--text-2); }
 
 .content { padding: 24px 26px 40px; flex: 1; }
 
@@ -396,6 +400,20 @@ ul { list-style: none; }
 .agenda-time { color: var(--primary); font-weight: 700; font-size: 13px; white-space: nowrap; padding-top: 1px; }
 .agenda-title { font-size: 13.5px; font-weight: 600; }
 .agenda-place { color: var(--text-2); font-size: 12px; margin-top: 2px; }
+.agenda-main { flex: 1; min-width: 0; }
+.agenda-actions { display: flex; gap: 6px; align-items: flex-start; }
+.agenda-actions .btn { padding: 4px 8px; }
+.day-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.day-head .day-title { margin-bottom: 0; }
+.agenda-empty { color: var(--text-2); font-size: 12.5px; padding: 8px 2px 12px; }
+.page-head-actions { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.page-head-actions > div { min-width: 0; }
+.empty-cell { text-align: center; color: var(--text-2); padding: 30px 10px !important; }
+.dim { color: #aab; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.check-line { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); margin: 2px 0 4px; cursor: pointer; }
+.check-line input { width: 16px; height: 16px; accent-color: var(--primary); }
+.confirm-text { color: var(--text); line-height: 1.7; margin-bottom: 4px; }
 
 /* ==================== 系统设置占位 ==================== */
 .placeholder-box {
@@ -505,6 +523,75 @@ ul { list-style: none; }
   color: var(--text);
 }
 .mail-read-actions { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--border); }
+
+/* 附件：列表行标记 */
+.mail-row .m-att { margin-right: 5px; font-size: 12px; }
+
+/* 附件：阅读面板下载列表 */
+.mail-attachments {
+  margin-top: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  background: #fbfcff;
+}
+.mail-attachments .att-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+.mail-attachments .att-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text);
+  text-decoration: none;
+  transition: background 0.15s ease;
+}
+.mail-attachments .att-item:hover { background: #eef2ff; }
+.mail-attachments .att-icon { font-size: 15px; }
+.mail-attachments .att-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-attachments .att-size { color: var(--text-2); font-size: 12px; white-space: nowrap; }
+.mail-attachments .att-dl { color: var(--primary); font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+
+/* 写信：附件选择 */
+.att-pick-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.att-pick-btn { cursor: pointer; display: inline-flex; align-items: center; }
+.att-pick-hint { color: var(--text-2); font-size: 12px; }
+.att-pick-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.att-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f4f7ff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+}
+.att-pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-pick-size { color: var(--text-2); white-space: nowrap; }
+.att-remove {
+  width: 22px; height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.att-remove:hover { background: var(--red-bg); color: var(--red); }
 .mail-empty {
   display: flex;
   flex-direction: column;
@@ -655,4 +742,26 @@ ul { list-style: none; }
   .quick-grid { grid-template-columns: repeat(2, 1fr); }
   .contact-grid { grid-template-columns: repeat(2, 1fr); }
   .mail-layout { grid-template-columns: 1fr; height: auto; }
+  .form-grid { grid-template-columns: 1fr; gap: 0; }
+}
+
+/* ==================== 安全防护 / DDoS 面板 ==================== */
+.sec-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 14px;
+  padding: 16px 20px; margin-bottom: 16px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.sec-info strong { display: block; font-size: 15px; color: var(--text); }
+.sec-sub { display: block; margin-top: 5px; font-size: 12.5px; color: var(--text-2); line-height: 1.5; }
+.sec-actions { display: flex; align-items: center; gap: 10px; }
+.sec-actions .btn { text-decoration: none; }
+
+.ddos-frame {
+  display: block; width: 100%;
+  height: calc(100vh - 200px); min-height: 620px;
+  background: transparent;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow);
 }

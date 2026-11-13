@@ -2,93 +2,12 @@
 
 /* ============================================================
    ddzt.old 协同办公 OA —— 演示展示版前端逻辑
-   除邮件模块外全部为写死的演示数据；邮件模块对接 api/mail.php
+   邮件模块对接 api/mail.php；公告/日程对接 api/content.php；其余模块为演示数据
    ============================================================ */
 
 /* ===================== 演示数据（集中定义，方便替换） ===================== */
 
 const DEMO_STATS = { todos: 8, notices: 5, attendance: 22 };
-
-const NOTICES = [
-  {
-    id: 1,
-    title: '关于召开 2026 年度工作总结大会的通知',
-    dept: '行政部',
-    date: '2026-11-10',
-    pinned: true,
-    body: [
-      '各部门、各科室：',
-      '为全面总结 2026 年度各项工作开展情况，谋划 2027 年重点任务，经研究决定，召开 2026 年度工作总结大会。现将有关事项通知如下：',
-      '一、会议时间：2026 年 11 月 20 日（星期五）09:00—12:00；二、会议地点：总部三楼多功能报告厅；三、参会人员：全体正式员工。',
-      '请各部门提前准备本部门年度工作总结（PPT，限时 8 分钟），并于 11 月 17 日前将电子版报送行政部邮箱。会议期间请将手机调至静音，准时出席，不得无故缺席。'
-    ]
-  },
-  {
-    id: 2,
-    title: '关于加强内网信息系统安全保密管理的通知',
-    dept: '信息中心',
-    date: '2026-11-08',
-    pinned: true,
-    body: [
-      '全体同仁：',
-      '近期安全巡检发现部分终端存在弱口令、未及时安装补丁等问题，为保障内网信息系统安全稳定运行，现就安全保密管理要求重申如下：',
-      '一、严禁将内网文件通过任何方式外传；二、账号口令须包含大小写字母与数字，长度不少于 8 位，每 90 天更换一次；三、发现可疑邮件、可疑链接请勿点击，第一时间上报信息中心。',
-      '信息中心将开展为期两周的专项检查，请各部门予以配合。'
-    ]
-  },
-  {
-    id: 3,
-    title: '2026 年 11 月员工生日会活动安排',
-    dept: '工会',
-    date: '2026-11-06',
-    pinned: false,
-    body: [
-      '各位同事：',
-      '为丰富员工文化生活，增强团队凝聚力，工会将举办 11 月员工生日会。',
-      '活动时间：11 月 13 日（星期五）16:00；活动地点：员工活动中心；活动内容：生日蛋糕、茶歇、互动游戏、礼品发放。',
-      '请 11 月生日的同事准时参加，也欢迎其他同事到场同乐。'
-    ]
-  },
-  {
-    id: 4,
-    title: '关于 2026 年度职工健康体检的通知',
-    dept: '人力资源部',
-    date: '2026-11-03',
-    pinned: false,
-    body: [
-      '全体正式员工：',
-      '公司统一组织 2026 年度职工健康体检，现将有关事项通知如下：',
-      '一、体检时间：11 月 16 日至 11 月 27 日（工作日 07:30—10:30）；二、体检地点：市第一人民医院健康管理中心；三、注意事项：体检当日须空腹，携带本人身份证。',
-      '请各部门统计本部门参检人员名单，于 11 月 5 日前报送人力资源部。'
-    ]
-  },
-  {
-    id: 5,
-    title: '关于办公区冬季供暖及节能管理的通知',
-    dept: '行政部',
-    date: '2026-10-30',
-    pinned: false,
-    body: [
-      '各部门：',
-      '冬季供暖将于 11 月 1 日正式开始，办公区空调温度统一设置为 20℃，请勿自行调节。',
-      '下班后请关闭电脑、打印机、饮水机等用电设备，最后离开办公区的同事负责关闭照明与门窗。',
-      '行政部将每周开展节能巡查，并在公告栏通报检查情况。'
-    ]
-  },
-  {
-    id: 6,
-    title: '关于开展第四季度业务技能培训的通知',
-    dept: '培训中心',
-    date: '2026-10-27',
-    pinned: false,
-    body: [
-      '各部门：',
-      '为提升员工专业技能水平，培训中心定于第四季度开展系列业务技能培训。',
-      '培训内容：公文写作规范、数据报表分析、内网系统操作实务、沟通与协作技巧。培训形式：线下授课 + 上机实操，每期半天。',
-      '请各部门根据工作实际组织报名，报名截止时间 10 月 31 日。'
-    ]
-  }
-];
 
 const APPROVALS = [
   { id: 1, applicant: '张伟', type: '请假', time: '2026-11-12 09:15', status: '待审批' },
@@ -110,59 +29,6 @@ const EMPLOYEES = [
   { no: 'DD1006', name: '赵敏', dept: '人力资源部', title: '招聘主管', phone: '138****1006', email: 'zhaomin@ddzt.old', hire: '2022-11-21' },
   { no: 'DD1007', name: '刘洋', dept: '市场部', title: '客户经理', phone: '138****1007', email: 'liuyang@ddzt.old', hire: '2025-04-07' },
   { no: 'DD1008', name: '陈静', dept: '行政部', title: '前台文员', phone: '138****1008', email: 'chenjing@ddzt.old', hire: '2026-02-24' }
-];
-
-const SCHEDULE = [
-  {
-    day: '周一（11-09）',
-    items: [
-      { time: '09:00-10:00', title: '部门周例会', place: '3 楼小会议室' },
-      { time: '14:00-15:30', title: '新员工入职培训（第二期）', place: '培训中心 201' },
-      { time: '16:00-17:00', title: '内网系统巡检结果评审', place: '技术部办公区' }
-    ]
-  },
-  {
-    day: '周二（11-10）',
-    items: [
-      { time: '10:00-11:30', title: '年度预算编制沟通会', place: '财务部会议室' },
-      { time: '15:00-16:00', title: '供应商合同用章审批', place: '行政部办公室' }
-    ]
-  },
-  {
-    day: '周三（11-11）',
-    items: [
-      { time: '09:30-10:30', title: '信息安全保密宣讲', place: '三楼多功能报告厅' },
-      { time: '13:30-15:00', title: '办公区消防演练', place: '总部大楼 A 座' },
-      { time: '16:30-17:30', title: '项目进度汇报（协同办公平台）', place: '技术部会议室' }
-    ]
-  },
-  {
-    day: '周四（11-12）',
-    items: [
-      { time: '09:00-12:00', title: '季度绩效面谈（行政部）', place: '2 楼洽谈室 A' },
-      { time: '14:00-15:00', title: '11 月生日会筹备会', place: '员工活动中心' }
-    ]
-  },
-  {
-    day: '周五（11-13）',
-    items: [
-      { time: '10:00-11:00', title: '月度经营分析会', place: '总经理会议室' },
-      { time: '16:00-18:00', title: '11 月员工生日会', place: '员工活动中心' }
-    ]
-  },
-  {
-    day: '周六（11-14）',
-    items: [
-      { time: '09:30-11:30', title: '羽毛球协会活动', place: '市体育馆 3 号场' }
-    ]
-  },
-  {
-    day: '周日（11-15）',
-    items: [
-      { time: '10:00-11:00', title: '下周工作计划整理', place: '线上 / 工位' },
-      { time: '15:00-16:30', title: '读书分享会（第七期）', place: '员工书吧' }
-    ]
-  }
 ];
 
 const DOCS = [
@@ -242,46 +108,215 @@ function closeModal() {
   $('#modal-body').innerHTML = '';
 }
 
-/* ===================== 登录 / 登出（纯前端演示） ===================== */
+/* ===================== 登录 / 登出（服务端会话） ===================== */
 
-function enterApp(user) {
+const OA = { user: null, role: 'user' };
+
+/* 仅管理员可以修改/保存 OA 内容；普通账号只读 */
+function isAdmin() {
+  return OA.role === 'admin';
+}
+
+/* OA 账号接口：api/auth.php，返回 {ok:true,data} / {ok:false,error} */
+async function oaApi(action, fields) {
+  const body = new URLSearchParams();
+  body.set('action', action);
+  if (fields) {
+    Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
+  }
+  try {
+    const res = await fetch('api/auth.php', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString()
+    });
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (parseErr) {
+      return { ok: false, error: '登录服务返回了异常内容' };
+    }
+    if (!res.ok) data.ok = false;
+    return data;
+  } catch (netErr) {
+    return { ok: false, error: '无法连接登录服务，请稍后重试' };
+  }
+}
+
+async function enterApp(user, role) {
+  OA.user = user;
+  OA.role = role === 'admin' ? 'admin' : 'user';
   $('#current-user').textContent = user;
+  const tag = $('#role-tag');
+  if (tag) {
+    tag.textContent = isAdmin() ? '管理员' : '只读用户';
+    tag.className = 'role-tag ' + (isAdmin() ? 'role-admin' : 'role-user');
+  }
   $('#login-page').classList.add('hidden');
   $('#app').classList.remove('hidden');
+  await loadContent(true);
   if (!location.hash) location.hash = '#/dashboard';
   navigate();
 }
 
 function exitApp() {
+  OA.user = null;
+  OA.role = 'user';
+  CONTENT.notices = [];
+  CONTENT.schedule = [];
+  CONTENT.loaded = false;
   sessionStorage.removeItem('oa_user');
   $('#app').classList.add('hidden');
   $('#login-page').classList.remove('hidden');
   $('#login-form').reset();
 }
 
-/* ===================== 邮件 API 封装（真实功能） ===================== */
+/* ===================== 公告 / 日程内容（服务端持久化，管理员可写） ===================== */
 
-const MAIL = { user: null, messages: [], selected: null };
+const CONTENT = { notices: [], schedule: [], loaded: false };
 
-async function mailApi(action, params) {
-  const body = new URLSearchParams();
-  body.append('action', action);
-  if (params) {
-    Object.keys(params).forEach(function (key) {
-      body.append(key, params[key]);
-    });
+/* 调用 api/content.php；action=data 用 GET 读取，其余用 POST 写入 */
+async function contentRequest(action, fields) {
+  const options = { credentials: 'same-origin' };
+  let url = 'api/content.php';
+  if (action === 'data') {
+    url += '?action=data';
+    options.method = 'GET';
+  } else {
+    const body = new URLSearchParams();
+    body.set('action', action);
+    Object.keys(fields || {}).forEach(function (key) { body.set(key, fields[key]); });
+    options.method = 'POST';
+    options.headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+    options.body = body.toString();
   }
   try {
-    const res = await fetch('api/mail.php', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      credentials: 'same-origin',
-      body: body.toString()
-    });
-    return await res.json();
+    const res = await fetch(url, options);
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (parseErr) {
+      return { ok: false, error: '内容服务返回了异常内容' };
+    }
+    if (!res.ok) data.ok = false;
+    return data;
+  } catch (netErr) {
+    return { ok: false, error: '无法连接内容服务，请稍后重试' };
+  }
+}
+
+async function loadContent(force) {
+  if (CONTENT.loaded && !force) return true;
+  const res = await contentRequest('data');
+  if (!res || res.ok !== true) {
+    if (!CONTENT.loaded) toast((res && res.error) ? res.error : '加载公告与日程失败', 'error');
+    return false;
+  }
+  CONTENT.notices = Array.isArray(res.data.notices) ? res.data.notices : [];
+  CONTENT.schedule = Array.isArray(res.data.schedule) ? res.data.schedule : [];
+  CONTENT.loaded = true;
+  return true;
+}
+
+/* 管理员保存/删除；成功后用响应里的最新数据刷新本地缓存 */
+async function contentMutate(action, fields) {
+  const res = await contentRequest(action, fields);
+  if (!res || res.ok !== true) {
+    toast((res && res.error) ? res.error : '保存失败，请稍后重试', 'error');
+    return false;
+  }
+  const data = res.data || {};
+  if (Array.isArray(data.notices)) CONTENT.notices = data.notices;
+  if (Array.isArray(data.schedule)) CONTENT.schedule = data.schedule;
+  CONTENT.loaded = true;
+  toast(data.message || '已保存', 'success');
+  return true;
+}
+
+function confirmDelete(text, onConfirm) {
+  openModal('确认删除',
+    '<p class="confirm-text">' + esc(text) + ' 删除后不可恢复，确定继续吗？</p>' +
+    '<div class="modal-actions">' +
+      '<button type="button" class="btn btn-ghost" id="confirm-cancel">取消</button>' +
+      '<button type="button" class="btn btn-danger" id="confirm-ok">删除</button>' +
+    '</div>');
+  $('#confirm-cancel').addEventListener('click', closeModal);
+  $('#confirm-ok').addEventListener('click', async function () {
+    this.disabled = true;
+    this.textContent = '删除中…';
+    const ok = await onConfirm();
+    if (ok) closeModal();
+    else { this.disabled = false; this.textContent = '删除'; }
+  });
+}
+
+function todayStr() {
+  const d = new Date();
+  const pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
+/* ===================== 邮件 API 封装（真实功能） ===================== */
+
+const MAIL = {
+  user: null,
+  messages: [],
+  selected: null,
+  folder: 'INBOX',
+  counts: { INBOX: 0, Sent: 0 }
+};
+
+const MAIL_MAX_FILES = 10;                    /* 与后端 MAX_ATTACH_FILES 保持一致 */
+const MAIL_MAX_BYTES = 20 * 1024 * 1024;      /* 与后端 MAX_ATTACH_TOTAL 保持一致 */
+
+/* 统一发请求：body 可以是字符串（普通表单编码）或 FormData（带附件） */
+async function mailRequest(body) {
+  const options = { method: 'POST', credentials: 'same-origin', body: body };
+  if (typeof body === 'string') {
+    options.headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+  }
+  try {
+    const res = await fetch('api/mail.php', options);
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: res.status === 413 ? '附件太大，服务器拒绝接收（413）'
+                                 : '邮件服务返回错误（HTTP ' + res.status + '）'
+      };
+    }
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch (parseErr) {
+      return { ok: false, error: '邮件服务返回了异常内容' };
+    }
   } catch (err) {
     return { ok: false, error: '请求失败，无法连接邮件服务' };
   }
+}
+
+/* attachments 为 File 数组时走 multipart/form-data，否则走普通表单编码 */
+async function mailApi(action, params, attachments) {
+  if (attachments && attachments.length) {
+    const form = new FormData();
+    form.append('action', action);
+    Object.keys(params || {}).forEach(function (key) {
+      form.append(key, params[key]);
+    });
+    attachments.forEach(function (file) {
+      form.append('attachments[]', file, file.name);
+    });
+    return mailRequest(form);
+  }
+  const body = new URLSearchParams();
+  body.append('action', action);
+  Object.keys(params || {}).forEach(function (key) {
+    body.append(key, params[key]);
+  });
+  return mailRequest(body.toString());
 }
 
 /* 调用邮件接口：成功返回 data，失败返回 null 并 toast 错误信息（silent=true 不提示） */
@@ -295,10 +330,13 @@ async function mailCall(action, params, silent) {
   return result.data;
 }
 
-async function refreshMailList(silent) {
-  const data = await mailCall('list', null, silent);
+async function refreshMailList(silent, folder) {
+  const target = folder || MAIL.folder || 'INBOX';
+  const data = await mailCall('list', { folder: target }, silent);
   if (data && data.messages) {
     MAIL.messages = data.messages;
+    MAIL.folder = data.folder || target;
+    if (data.counts) MAIL.counts = data.counts;
     return true;
   }
   return false;
@@ -310,7 +348,7 @@ function renderDashboard() {
   $('#content').innerHTML =
     '<div class="stat-grid">' +
       '<div class="stat-card"><div class="stat-icon i-blue">📋</div><div><div class="stat-num">' + DEMO_STATS.todos + '</div><div class="stat-label">待办事项</div></div></div>' +
-      '<div class="stat-card"><div class="stat-icon i-purple">📢</div><div><div class="stat-num">' + DEMO_STATS.notices + '</div><div class="stat-label">公告通知</div></div></div>' +
+      '<div class="stat-card"><div class="stat-icon i-purple">📢</div><div><div class="stat-num">' + CONTENT.notices.length + '</div><div class="stat-label">公告通知</div></div></div>' +
       '<div class="stat-card"><div class="stat-icon i-green">🗓️</div><div><div class="stat-num">' + DEMO_STATS.attendance + ' 天</div><div class="stat-label">本月考勤</div></div></div>' +
       '<div class="stat-card"><div class="stat-icon i-orange">✉️</div><div><div class="stat-num" id="stat-unread">—</div><div class="stat-label">未读邮件</div></div></div>' +
     '</div>' +
@@ -320,14 +358,18 @@ function renderDashboard() {
       }).join('') +
     '</div></div>' +
     '<div class="card"><div class="card-title">📢 最新公告<span class="more" id="more-notices">查看全部 &gt;</span></div>' +
-      NOTICES.slice(0, 3).map(function (n) {
-        return '<div class="todo-item row-click" data-notice="' + n.id + '"><span>' + (n.pinned ? '📌' : '📄') + '</span><span class="todo-text">' + esc(n.title) + (n.pinned ? '<span class="badge-pin">置顶</span>' : '') + '</span><span class="todo-date">' + esc(n.date) + '</span></div>';
-      }).join('') +
+      (CONTENT.notices.length
+        ? CONTENT.notices.slice(0, 3).map(function (n) {
+            return '<div class="todo-item row-click" data-notice="' + n.id + '"><span>' + (n.pinned ? '📌' : '📄') + '</span><span class="todo-text">' + esc(n.title) + (n.pinned ? '<span class="badge-pin">置顶</span>' : '') + '</span><span class="todo-date">' + esc(n.date) + '</span></div>';
+          }).join('')
+        : '<div class="todo-item"><span>📭</span><span class="todo-text">暂无公告</span></div>') +
     '</div>' +
-    '<div class="card"><div class="card-title">✅ 我的待办清单</div><div id="todo-list">' +
+    '<div class="card"><div class="card-title">✅ 我的待办清单' +
+      (isAdmin() ? '' : '<span class="readonly-hint">只读 · 仅管理员可勾选</span>') +
+    '</div><div id="todo-list">' +
       TODOS.map(function (t) {
         return '<label class="todo-item' + (t.done ? ' done' : '') + '" data-todo="' + t.id + '">' +
-          '<input type="checkbox"' + (t.done ? ' checked' : '') + '>' +
+          '<input type="checkbox"' + (t.done ? ' checked' : '') + (isAdmin() ? '' : ' disabled title="仅管理员可修改"') + '>' +
           '<span class="todo-text">' + esc(t.text) + '</span>' +
           '<span class="todo-date">' + esc(t.date) + '</span></label>';
       }).join('') +
@@ -340,7 +382,13 @@ function renderDashboard() {
   if (more) more.addEventListener('click', function () { location.hash = '#/notices'; });
   $('#content').querySelectorAll('[data-todo]').forEach(function (label) {
     const box = label.querySelector('input[type="checkbox"]');
+    if (!box) return;
     box.addEventListener('change', function () {
+      if (!isAdmin()) {
+        box.checked = !box.checked;
+        toast('仅管理员可修改待办状态', 'error');
+        return;
+      }
       const item = TODOS.filter(function (t) { return String(t.id) === label.dataset.todo; })[0];
       if (item) item.done = box.checked;
       label.classList.toggle('done', box.checked);
@@ -368,39 +416,126 @@ async function loadUnreadCount() {
 /* ===================== 公告通知 ===================== */
 
 function renderNotices() {
+  const admin = isAdmin();
+  const rows = CONTENT.notices.map(function (n) {
+    return '<tr class="row-click" data-notice="' + n.id + '">' +
+      '<td class="notice-title-cell">' + esc(n.title) + '</td>' +
+      '<td class="dept-tag">' + esc(n.dept) + '</td>' +
+      '<td>' + esc(n.date) + '</td>' +
+      '<td>' + (n.pinned ? '<span class="badge-pin">置顶</span>' : '<span class="dim">—</span>') + '</td>' +
+      (admin
+        ? '<td class="col-actions">' +
+            '<button type="button" class="btn btn-sm btn-ghost" data-notice-edit="' + n.id + '" title="编辑公告">✏️ 编辑</button>' +
+            '<button type="button" class="btn btn-sm btn-danger" data-notice-del="' + n.id + '" title="删除公告">🗑️ 删除</button>' +
+          '</td>'
+        : '') +
+    '</tr>';
+  }).join('');
   $('#content').innerHTML =
-    '<div class="page-head"><h2>公告通知</h2><p>查看公司发布的各类公告与通知，点击标题查看详情</p></div>' +
+    '<div class="page-head page-head-actions"><div><h2>公告通知</h2><p>' +
+      (admin ? '可发布、编辑、删除公告；普通账号只能查看' : '查看公司发布的各类公告与通知，点击标题查看详情') +
+    '</p></div>' +
+      (admin ? '<button type="button" class="btn btn-primary" id="notice-add">＋ 新增公告</button>' : '') +
+    '</div>' +
     '<div class="card"><div class="table-wrap"><table class="table">' +
-      '<thead><tr><th style="width:52%">标题</th><th>发布部门</th><th>发布日期</th><th>标记</th></tr></thead><tbody>' +
-      NOTICES.map(function (n) {
-        return '<tr class="row-click" data-notice="' + n.id + '">' +
-          '<td class="notice-title-cell">' + esc(n.title) + '</td>' +
-          '<td class="dept-tag">' + esc(n.dept) + '</td>' +
-          '<td>' + esc(n.date) + '</td>' +
-          '<td>' + (n.pinned ? '<span class="badge-pin">置顶</span>' : '<span style="color:#aab;margin-left:8px">—</span>') + '</td>' +
-        '</tr>';
-      }).join('') +
+      '<thead><tr><th style="width:' + (admin ? '46%' : '52%') + '">标题</th><th>发布部门</th><th>发布日期</th><th>标记</th>' + (admin ? '<th>操作</th>' : '') + '</tr></thead><tbody>' +
+      (rows || '<tr><td colspan="' + (admin ? 5 : 4) + '" class="empty-cell">暂无公告' + (admin ? '，点击右上角「新增公告」发布第一条' : '') + '</td></tr>') +
       '</tbody></table></div></div>';
 
+  if (admin) {
+    $('#notice-add').addEventListener('click', function () { openNoticeEditor(null); });
+  }
   $('#content').querySelectorAll('[data-notice]').forEach(function (row) {
-    row.addEventListener('click', function () { openNoticeModal(Number(row.dataset.notice)); });
+    row.addEventListener('click', function (ev) {
+      if (ev.target.closest('button')) return;
+      openNoticeModal(Number(row.dataset.notice));
+    });
+  });
+  $('#content').querySelectorAll('[data-notice-edit]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const notice = CONTENT.notices.filter(function (n) { return String(n.id) === btn.dataset.noticeEdit; })[0];
+      if (notice) openNoticeEditor(notice);
+    });
+  });
+  $('#content').querySelectorAll('[data-notice-del]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const notice = CONTENT.notices.filter(function (n) { return String(n.id) === btn.dataset.noticeDel; })[0];
+      if (!notice) return;
+      confirmDelete('公告「' + notice.title + '」', async function () {
+        const ok = await contentMutate('notice_delete', { id: notice.id });
+        if (ok) renderNotices();
+        return ok;
+      });
+    });
   });
 }
 
 function openNoticeModal(id) {
-  const notice = NOTICES.filter(function (n) { return n.id === id; })[0];
+  const notice = CONTENT.notices.filter(function (n) { return String(n.id) === String(id); })[0];
   if (!notice) return;
+  const paragraphs = (notice.body && notice.body.length) ? notice.body : ['（暂无正文）'];
   const html =
     '<div class="notice-meta">发布部门：' + esc(notice.dept) + '　·　发布日期：' + esc(notice.date) + (notice.pinned ? '　·　📌 置顶公告' : '') + '</div>' +
-    notice.body.map(function (p) { return '<p>' + esc(p) + '</p>'; }).join('');
+    paragraphs.map(function (p) { return '<p>' + esc(p) + '</p>'; }).join('') +
+    (isAdmin()
+      ? '<div class="modal-actions"><button type="button" class="btn btn-ghost" id="notice-detail-edit">✏️ 编辑</button></div>'
+      : '');
   openModal(notice.title, html);
+  if (isAdmin()) {
+    $('#notice-detail-edit').addEventListener('click', function () { openNoticeEditor(notice); });
+  }
+}
+
+function openNoticeEditor(notice) {
+  const n = notice || { id: 0, title: '', dept: '', date: todayStr(), pinned: 0, body: [] };
+  openModal(notice ? '编辑公告' : '新增公告',
+    '<form id="notice-form" autocomplete="off">' +
+      '<div class="form-field"><label for="nf-title">标题</label><input id="nf-title" type="text" maxlength="100" value="' + esc(n.title) + '" placeholder="请输入公告标题"></div>' +
+      '<div class="form-grid">' +
+        '<div class="form-field"><label for="nf-dept">发布部门</label><input id="nf-dept" type="text" maxlength="30" value="' + esc(n.dept) + '" placeholder="例如：行政部"></div>' +
+        '<div class="form-field"><label for="nf-date">发布日期</label><input id="nf-date" type="date" value="' + esc(n.date) + '"></div>' +
+      '</div>' +
+      '<div class="form-field"><label for="nf-body">正文</label><textarea id="nf-body" rows="8" placeholder="每行一段，空行会被忽略">' + esc((n.body || []).join('\n')) + '</textarea></div>' +
+      '<label class="check-line"><input type="checkbox" id="nf-pinned"' + (n.pinned ? ' checked' : '') + '> 置顶公告</label>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="btn btn-ghost" id="notice-cancel">取消</button>' +
+        '<button type="submit" class="btn btn-primary">保存</button>' +
+      '</div>' +
+    '</form>');
+  $('#notice-cancel').addEventListener('click', closeModal);
+  $('#notice-form').addEventListener('submit', async function (ev) {
+    ev.preventDefault();
+    const title = $('#nf-title').value.trim();
+    const dept = $('#nf-dept').value.trim();
+    const date = $('#nf-date').value;
+    if (!title) { toast('请填写公告标题', 'error'); return; }
+    if (!dept) { toast('请填写发布部门', 'error'); return; }
+    if (!date) { toast('请选择发布日期', 'error'); return; }
+    const btn = ev.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = '保存中…';
+    const ok = await contentMutate('notice_save', {
+      id: n.id || 0,
+      title: title,
+      dept: dept,
+      date: date,
+      pinned: $('#nf-pinned').checked ? 1 : 0,
+      body: $('#nf-body').value
+    });
+    btn.disabled = false;
+    btn.textContent = '保存';
+    if (ok) { closeModal(); renderNotices(); }
+  });
 }
 
 /* ===================== 流程审批 ===================== */
 
 function renderApprovals() {
   $('#content').innerHTML =
-    '<div class="page-head"><h2>流程审批</h2><p>处理各类申请流程，点击「通过 / 驳回」即时更新审批状态</p></div>' +
+    '<div class="page-head"><h2>流程审批</h2><p>' +
+      (isAdmin() ? '处理各类申请流程，点击「通过 / 驳回」即时更新审批状态'
+                 : '只读视图：仅管理员可审批，普通账号可查看流程状态') +
+    '</p></div>' +
     '<div class="card"><div class="table-wrap"><table class="table">' +
       '<thead><tr><th>申请人</th><th>申请类型</th><th>提交时间</th><th>状态</th><th>操作</th></tr></thead><tbody id="approval-body">' +
       APPROVALS.map(approvalRowHtml).join('') +
@@ -420,12 +555,16 @@ function approvalRowHtml(a) {
     '<td>' + esc(a.time) + '</td>' +
     '<td><span class="badge ' + badge + '">' + esc(a.status) + '</span></td>' +
     '<td class="col-actions">' +
-      '<button class="btn btn-sm btn-success" data-approve="' + a.id + '" data-act="pass"' + (done ? ' disabled' : '') + '>通过</button>' +
-      '<button class="btn btn-sm btn-danger" data-approve="' + a.id + '" data-act="reject"' + (done ? ' disabled' : '') + '>驳回</button>' +
+      '<button class="btn btn-sm btn-success" data-approve="' + a.id + '" data-act="pass"' + (done || !isAdmin() ? ' disabled' : '') + (isAdmin() ? '' : ' title="仅管理员可审批"') + '>通过</button>' +
+      '<button class="btn btn-sm btn-danger" data-approve="' + a.id + '" data-act="reject"' + (done || !isAdmin() ? ' disabled' : '') + (isAdmin() ? '' : ' title="仅管理员可审批"') + '>驳回</button>' +
     '</td></tr>';
 }
 
 function handleApproval(id, act) {
+  if (!isAdmin()) {
+    toast('仅管理员可审批', 'error');
+    return;
+  }
   const item = APPROVALS.filter(function (a) { return a.id === id; })[0];
   if (!item || item.status !== '待审批') return;
   item.status = act === 'pass' ? '已通过' : '已驳回';
@@ -474,19 +613,126 @@ function hrRowsHtml(list) {
 
 /* ===================== 日程安排 ===================== */
 
+function groupedSchedule() {
+  const groups = [];
+  const index = {};
+  CONTENT.schedule.forEach(function (item) {
+    const key = item.day || '未分组';
+    if (!index[key]) {
+      index[key] = { day: key, items: [] };
+      groups.push(index[key]);
+    }
+    index[key].items.push(item);
+  });
+  return groups;
+}
+
 function renderSchedule() {
-  $('#content').innerHTML =
-    '<div class="page-head"><h2>日程安排</h2><p>本周（11-09 至 11-15）工作与活动议程</p></div>' +
-    '<div class="card">' +
-      SCHEDULE.map(function (d) {
-        return '<div class="day-block"><div class="day-title">📆 ' + esc(d.day) + '</div>' +
-          d.items.map(function (it) {
-            return '<div class="agenda-item"><div class="agenda-time">' + esc(it.time) + '</div>' +
-              '<div><div class="agenda-title">' + esc(it.title) + '</div><div class="agenda-place">📍 ' + esc(it.place) + '</div></div></div>';
-          }).join('') +
-        '</div>';
-      }).join('') +
+  const admin = isAdmin();
+  const groups = groupedSchedule();
+  const dayOptions = groups.map(function (g) {
+    return '<option value="' + esc(g.day) + '"></option>';
+  }).join('');
+
+  const blocks = groups.map(function (g) {
+    const items = g.items.map(function (it) {
+      return '<div class="agenda-item">' +
+        '<div class="agenda-time">' + esc(it.time) + '</div>' +
+        '<div class="agenda-main"><div class="agenda-title">' + esc(it.title) + '</div>' +
+          (it.place ? '<div class="agenda-place">📍 ' + esc(it.place) + '</div>' : '') +
+        '</div>' +
+        (admin
+          ? '<div class="agenda-actions">' +
+              '<button type="button" class="btn btn-sm btn-ghost" data-item-edit="' + it.id + '" title="编辑日程">✏️</button>' +
+              '<button type="button" class="btn btn-sm btn-danger" data-item-del="' + it.id + '" title="删除日程">🗑️</button>' +
+            '</div>'
+          : '') +
+      '</div>';
+    }).join('');
+    return '<div class="day-block">' +
+      '<div class="day-head"><div class="day-title">📆 ' + esc(g.day) + '</div>' +
+        (admin ? '<button type="button" class="btn btn-sm btn-ghost" data-add-day="' + esc(g.day) + '">＋ 添加日程</button>' : '') +
+      '</div>' +
+      (items || '<div class="agenda-empty">这一天暂无日程</div>') +
     '</div>';
+  }).join('');
+
+  $('#content').innerHTML =
+    '<div class="page-head page-head-actions"><div><h2>日程安排</h2><p>' +
+      (admin ? '可添加、编辑、删除日程；普通账号只能查看' : '本周工作与活动议程') +
+    '</p></div>' +
+      (admin ? '<button type="button" class="btn btn-primary" id="schedule-add">＋ 新增日程</button>' : '') +
+    '</div>' +
+    '<div class="card">' +
+      (blocks || '<div class="placeholder-box" style="padding:50px 20px"><div class="ph-icon">📅</div><h3>暂无日程</h3><p>' + (admin ? '点击右上角「新增日程」添加第一条安排。' : '管理员还未添加日程安排。') + '</p></div>') +
+    '</div>';
+
+  if (!admin) return;
+  $('#schedule-add').addEventListener('click', function () { openScheduleEditor(null, ''); });
+  $('#content').querySelectorAll('[data-add-day]').forEach(function (btn) {
+    btn.addEventListener('click', function () { openScheduleEditor(null, btn.dataset.addDay); });
+  });
+  $('#content').querySelectorAll('[data-item-edit]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const item = CONTENT.schedule.filter(function (it) { return String(it.id) === btn.dataset.itemEdit; })[0];
+      if (item) openScheduleEditor(item, item.day);
+    });
+  });
+  $('#content').querySelectorAll('[data-item-del]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const item = CONTENT.schedule.filter(function (it) { return String(it.id) === btn.dataset.itemDel; })[0];
+      if (!item) return;
+      confirmDelete('日程「' + item.title + '」', async function () {
+        const ok = await contentMutate('schedule_delete', { id: item.id });
+        if (ok) renderSchedule();
+        return ok;
+      });
+    });
+  });
+}
+
+function openScheduleEditor(item, presetDay) {
+  const it = item || { id: 0, day: presetDay || '', time: '', title: '', place: '' };
+  const dayOptions = groupedSchedule().map(function (g) {
+    return '<option value="' + esc(g.day) + '"></option>';
+  }).join('');
+  openModal(item ? '编辑日程' : '新增日程',
+    '<form id="schedule-form" autocomplete="off">' +
+      '<div class="form-field"><label for="sf-day">日期 / 星期</label><input id="sf-day" type="text" maxlength="40" list="sf-day-list" value="' + esc(it.day) + '" placeholder="例如：周一（11-09）"><datalist id="sf-day-list">' + dayOptions + '</datalist></div>' +
+      '<div class="form-grid">' +
+        '<div class="form-field"><label for="sf-time">时间</label><input id="sf-time" type="text" maxlength="40" value="' + esc(it.time) + '" placeholder="例如：09:00-10:00"></div>' +
+        '<div class="form-field"><label for="sf-place">地点</label><input id="sf-place" type="text" maxlength="60" value="' + esc(it.place) + '" placeholder="例如：3 楼小会议室"></div>' +
+      '</div>' +
+      '<div class="form-field"><label for="sf-title">事项</label><input id="sf-title" type="text" maxlength="100" value="' + esc(it.title) + '" placeholder="请输入日程事项"></div>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="btn btn-ghost" id="schedule-cancel">取消</button>' +
+        '<button type="submit" class="btn btn-primary">保存</button>' +
+      '</div>' +
+    '</form>');
+  $('#schedule-cancel').addEventListener('click', closeModal);
+  $('#schedule-form').addEventListener('submit', async function (ev) {
+    ev.preventDefault();
+    const day = $('#sf-day').value.trim();
+    const time = $('#sf-time').value.trim();
+    const title = $('#sf-title').value.trim();
+    const place = $('#sf-place').value.trim();
+    if (!day) { toast('请填写日期或星期', 'error'); return; }
+    if (!time) { toast('请填写时间', 'error'); return; }
+    if (!title) { toast('请填写日程事项', 'error'); return; }
+    const btn = ev.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = '保存中…';
+    const ok = await contentMutate('schedule_save', {
+      id: it.id || 0,
+      day: day,
+      time: time,
+      title: title,
+      place: place
+    });
+    btn.disabled = false;
+    btn.textContent = '保存';
+    if (ok) { closeModal(); renderSchedule(); }
+  });
 }
 
 /* ===================== 文档中心 ===================== */
@@ -543,6 +789,29 @@ function renderSettings() {
     '</div></div>';
 }
 
+/* ===================== 安全防护（内嵌 DDoS 监控面板） ===================== */
+
+function renderSecurity() {
+  $('#content').innerHTML =
+    '<div class="sec-bar">' +
+      '<div class="sec-info">' +
+        '<strong>DDoS 流量监控与自动过滤</strong>' +
+        '<span class="sec-sub">靶机防护面板已接入 OA：TCP/UDP/HTTP 速率、来源分类、封禁名单、自动屏蔽开关 · 面板每 2 秒自动刷新</span>' +
+      '</div>' +
+      '<div class="sec-actions">' +
+        '<button type="button" class="btn btn-ghost" id="sec-refresh">🔄 刷新</button>' +
+        '<a class="btn btn-ghost" href="/ddos/" target="_blank" rel="noopener">↗ 新窗口打开</a>' +
+      '</div>' +
+    '</div>' +
+    '<iframe id="ddos-frame" class="ddos-frame" src="/ddos/?embed=1" title="DDoS 流量监控与自动过滤面板" loading="lazy"></iframe>';
+
+  $('#sec-refresh').addEventListener('click', function () {
+    const f = $('#ddos-frame');
+    if (f) f.src = '/ddos/?embed=1&t=' + Date.now();
+    toast('防护面板已刷新');
+  });
+}
+
 /* ===================== 邮件模块（真实功能） ===================== */
 
 function renderMail() {
@@ -565,13 +834,14 @@ async function initMail() {
 }
 
 function paintMailLogin() {
+  const prefill = OA.user || '';
   $('#content').innerHTML =
     '<div class="page-head"><h2>邮件</h2><p>内网邮件系统 · 请先登录邮箱</p></div>' +
     '<div class="mail-login-wrap"><div class="mail-login-card">' +
       '<h3>📮 邮箱登录</h3>' +
-      '<div class="mail-login-hint">💡 演示账号：eva@ddzt.old 或 kk@ddzt.old<br>密码分别是 eva 和 kk</div>' +
+      '<div class="mail-login-hint">💡 使用邮箱账号登录：eva@ddzt.old / rei、kk@ddzt.old / zmjjkk、admin@ddzt.old / admin<br>登录 OA 后进入邮件会自动关联，无需再次登录</div>' +
       '<form id="mail-login-form" autocomplete="off">' +
-        '<div class="form-field"><label for="mail-user">邮箱账号</label><input id="mail-user" type="text" placeholder="例如：eva@ddzt.old"></div>' +
+        '<div class="form-field"><label for="mail-user">邮箱账号</label><input id="mail-user" type="text" placeholder="例如：eva@ddzt.old" value="' + esc(prefill) + '"></div>' +
         '<div class="form-field"><label for="mail-pass">密码</label><input id="mail-pass" type="password" placeholder="请输入密码"></div>' +
         '<button type="submit" class="btn btn-primary btn-block">登录邮箱</button>' +
       '</form>' +
@@ -591,46 +861,91 @@ function paintMailLogin() {
   });
 }
 
+function formatSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n <= 0) return '0 B';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+function mailAttachmentUrl(folder, uid, part) {
+  return 'api/mail.php?action=attachment&folder=' + encodeURIComponent(folder || 'INBOX') +
+    '&uid=' + encodeURIComponent(uid) + '&part=' + encodeURIComponent(part);
+}
+
 function mailRowHtml(m) {
   const active = MAIL.selected && String(MAIL.selected.uid) === String(m.uid) ? ' active' : '';
-  const unreadCls = m.seen ? '' : ' unread';
+  const unreadCls = (MAIL.folder === 'INBOX' && !m.seen) ? ' unread' : '';
+  const who = MAIL.folder === 'Sent' ? ('发给 ' + (m.to || m.to_addr || '')) : m.from;
+  const clip = m.has_attachment
+    ? '<span class="m-att" title="含 ' + (m.attachment_count || 1) + ' 个附件">📎</span>'
+    : '';
   return '<div class="mail-row' + active + unreadCls + '" data-uid="' + esc(m.uid) + '">' +
     '<span class="dot' + (m.seen ? ' read' : '') + '"></span>' +
     '<div class="m-main">' +
-      '<div class="m-from"><span>' + esc(m.from) + '</span><span class="m-date">' + esc(m.date) + '</span></div>' +
-      '<div class="m-subject">' + esc(m.subject) + '</div>' +
+      '<div class="m-from"><span>' + esc(who) + '</span><span class="m-date">' + esc(m.date) + '</span></div>' +
+      '<div class="m-subject">' + clip + esc(m.subject) + '</div>' +
       '<div class="m-snippet">' + esc(m.snippet) + '</div>' +
     '</div></div>';
 }
 
 function paintMail() {
-  const readHtml = MAIL.selected ?
-    '<div class="mail-read">' +
-      '<h3>' + esc(MAIL.selected.subject) + '</h3>' +
-      '<div class="mail-meta">' +
-        '<div><strong>发件人：</strong>' + esc(MAIL.selected.from) + ' &lt;' + esc(MAIL.selected.from_addr) + '&gt;</div>' +
-        '<div><strong>收件人：</strong>' + esc(MAIL.selected.to) + '</div>' +
-        '<div><strong>时　间：</strong>' + esc(MAIL.selected.date) + '</div>' +
-      '</div>' +
-      '<div class="mail-body-text">' + esc(MAIL.selected.body_text) + '</div>' +
-      '<div class="mail-read-actions"><button class="btn btn-danger" id="mail-delete-btn">🗑️ 删除</button></div>' +
-    '</div>' :
-    '<div class="mail-empty"><div class="e-icon">📭</div><div>选择左侧邮件进行阅读</div></div>';
+  const isSent = MAIL.folder === 'Sent';
+  let readHtml;
+  if (MAIL.selected) {
+    const sel = MAIL.selected;
+    const atts = sel.attachments || [];
+    let attHtml = '';
+    if (atts.length) {
+      attHtml = '<div class="mail-attachments"><div class="att-title">📎 附件（' + atts.length + '）</div>' +
+        atts.map(function (a) {
+          return '<a class="att-item" href="' + mailAttachmentUrl(sel.folder || MAIL.folder, sel.uid, a.part) + '" download>' +
+            '<span class="att-icon">📄</span>' +
+            '<span class="att-name">' + esc(a.filename) + '</span>' +
+            '<span class="att-size">' + formatSize(a.size) + '</span>' +
+            '<span class="att-dl">下载</span></a>';
+        }).join('') +
+        '</div>';
+    }
+    readHtml =
+      '<div class="mail-read">' +
+        '<h3>' + esc(sel.subject) + '</h3>' +
+        '<div class="mail-meta">' +
+          '<div><strong>发件人：</strong>' + esc(sel.from) + ' &lt;' + esc(sel.from_addr) + '&gt;</div>' +
+          '<div><strong>收件人：</strong>' + esc(sel.to) + '</div>' +
+          '<div><strong>时　间：</strong>' + esc(sel.date) + '</div>' +
+        '</div>' +
+        '<div class="mail-body-text">' + esc(sel.body_text) + '</div>' +
+        attHtml +
+        '<div class="mail-read-actions"><button class="btn btn-danger" id="mail-delete-btn">🗑️ 删除</button></div>' +
+      '</div>';
+  } else {
+    readHtml = '<div class="mail-empty"><div class="e-icon">📭</div><div>' +
+      (isSent ? '选择上方已发送邮件查看' : '选择左侧邮件进行阅读') + '</div></div>';
+  }
 
+  const counts = MAIL.counts || { INBOX: 0, Sent: 0 };
   $('#content').innerHTML =
     '<div class="mail-toolbar">' +
       '<button class="btn btn-primary" id="mail-compose-btn">✍️ 写信</button>' +
-      '<button class="btn btn-ghost" id="mail-inbox-btn">📥 收件箱</button>' +
       '<button class="btn btn-ghost" id="mail-refresh-btn">🔄 刷新</button>' +
       '<button class="btn btn-ghost" id="mail-logout-btn">🚪 退出</button>' +
       '<span class="mail-user-tag">当前邮箱：' + esc(MAIL.user) + '</span>' +
     '</div>' +
     '<div class="mail-layout">' +
       '<div class="mail-pane mail-folders">' +
-        '<div class="folder-item active"><span>📥 收件箱 INBOX</span><span class="folder-count">' + MAIL.messages.length + '</span></div>' +
+        '<div class="folder-item' + (isSent ? '' : ' active') + '" data-folder="INBOX">' +
+          '<span>📥 收件箱</span><span class="folder-count">' + (counts.INBOX || 0) + '</span></div>' +
+        '<div class="folder-item' + (isSent ? ' active' : '') + '" data-folder="Sent">' +
+          '<span>📤 已发送</span><span class="folder-count">' + (counts.Sent || 0) + '</span></div>' +
       '</div>' +
       '<div class="mail-pane mail-list" id="mail-list-pane">' +
-        (MAIL.messages.length ? MAIL.messages.map(mailRowHtml).join('') : '<div class="mail-empty"><div class="e-icon">📭</div><div>收件箱暂无邮件</div></div>') +
+        (MAIL.messages.length
+          ? MAIL.messages.map(mailRowHtml).join('')
+          : '<div class="mail-empty"><div class="e-icon">📭</div><div>' +
+            (isSent ? '已发送箱暂无邮件' : '收件箱暂无邮件') + '</div></div>') +
       '</div>' +
       '<div class="mail-pane" id="mail-read-pane">' + readHtml + '</div>' +
     '</div>';
@@ -638,22 +953,31 @@ function paintMail() {
   $('#content').querySelectorAll('.mail-row').forEach(function (row) {
     row.addEventListener('click', function () { openMail(row.dataset.uid); });
   });
-  $('#mail-compose-btn').addEventListener('click', openComposeModal);
-  $('#mail-inbox-btn').addEventListener('click', async function () {
-    MAIL.selected = null;
-    await refreshMailList();
-    paintMail();
+  $('#content').querySelectorAll('.folder-item').forEach(function (item) {
+    item.addEventListener('click', async function () {
+      const folder = item.dataset.folder;
+      if (folder === MAIL.folder) return;
+      const previous = MAIL.folder;
+      MAIL.folder = folder;
+      MAIL.selected = null;
+      const ok = await refreshMailList(true);
+      if (!ok) MAIL.folder = previous;
+      paintMail();
+    });
   });
+  $('#mail-compose-btn').addEventListener('click', openComposeModal);
   $('#mail-refresh-btn').addEventListener('click', async function () {
-    await refreshMailList();
+    const ok = await refreshMailList();
     paintMail();
-    toast('收件箱已刷新', 'success');
+    if (ok) toast(MAIL.folder === 'Sent' ? '已发送箱已刷新' : '收件箱已刷新', 'success');
   });
   $('#mail-logout-btn').addEventListener('click', async function () {
     await mailCall('logout');
     MAIL.user = null;
     MAIL.messages = [];
     MAIL.selected = null;
+    MAIL.folder = 'INBOX';
+    MAIL.counts = { INBOX: 0, Sent: 0 };
     toast('已退出邮箱登录', 'success');
     paintMailLogin();
   });
@@ -661,7 +985,7 @@ function paintMail() {
   if (delBtn) {
     delBtn.addEventListener('click', async function () {
       if (!MAIL.selected) return;
-      const data = await mailCall('delete', { uid: MAIL.selected.uid });
+      const data = await mailCall('delete', { uid: MAIL.selected.uid, folder: MAIL.folder });
       if (!data) return;
       toast(data.message || '已删除', 'success');
       MAIL.selected = null;
@@ -672,8 +996,10 @@ function paintMail() {
 }
 
 async function openMail(uid) {
-  const data = await mailCall('read', { uid: uid });
+  const folder = MAIL.folder;
+  const data = await mailCall('read', { uid: uid, folder: folder });
   if (!data) return;
+  data.folder = data.folder || folder;
   MAIL.selected = data;
   const row = MAIL.messages.filter(function (m) { return String(m.uid) === String(uid); })[0];
   if (row) row.seen = true;
@@ -681,7 +1007,9 @@ async function openMail(uid) {
 }
 
 function openComposeModal() {
-  openModal('写邮件',
+  const picked = [];
+
+  openModal('写信',
     '<form id="compose-form" autocomplete="off">' +
       '<div class="form-field"><label for="compose-to">收件人</label>' +
         '<input id="compose-to" type="text" list="mail-address-list" placeholder="请选择或输入收件人">' +
@@ -691,12 +1019,63 @@ function openComposeModal() {
         '</datalist>' +
       '</div>' +
       '<div class="form-field"><label for="compose-subject">主题</label><input id="compose-subject" type="text" placeholder="请输入邮件主题"></div>' +
-      '<div class="form-field"><label for="compose-body">正文</label><textarea id="compose-body" rows="8" placeholder="请输入邮件正文…"></textarea></div>' +
+      '<div class="form-field"><label for="compose-body">正文</label><textarea id="compose-body" rows="7" placeholder="请输入邮件正文…"></textarea></div>' +
+      '<div class="form-field"><label>附件</label>' +
+        '<div class="att-pick-row">' +
+          '<label class="btn btn-ghost btn-sm att-pick-btn" for="compose-files">📎 添加附件</label>' +
+          '<span class="att-pick-hint">单个 ≤20MB，合计 ≤20MB，最多 10 个</span>' +
+        '</div>' +
+        '<input id="compose-files" type="file" multiple hidden>' +
+        '<div id="compose-file-list" class="att-pick-list"></div>' +
+      '</div>' +
       '<div class="modal-actions">' +
         '<button type="button" class="btn btn-ghost" id="compose-cancel">取消</button>' +
         '<button type="submit" class="btn btn-primary">发送</button>' +
       '</div>' +
     '</form>');
+
+  function totalSize() {
+    return picked.reduce(function (sum, f) { return sum + f.size; }, 0);
+  }
+
+  function renderPicked() {
+    const box = $('#compose-file-list');
+    if (!picked.length) { box.innerHTML = ''; return; }
+    box.innerHTML = picked.map(function (f, i) {
+      return '<div class="att-pick-item">' +
+        '<span class="att-pick-name">📄 ' + esc(f.name) + '</span>' +
+        '<span class="att-pick-size">' + formatSize(f.size) + '</span>' +
+        '<button type="button" class="att-remove" data-idx="' + i + '" title="移除">×</button>' +
+      '</div>';
+    }).join('');
+    box.querySelectorAll('.att-remove').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        picked.splice(Number(btn.dataset.idx), 1);
+        renderPicked();
+      });
+    });
+  }
+
+  $('#compose-files').addEventListener('change', function (ev) {
+    const files = Array.prototype.slice.call(ev.target.files || []);
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      if (picked.length >= MAIL_MAX_FILES) {
+        toast('最多添加 ' + MAIL_MAX_FILES + ' 个附件', 'error');
+        break;
+      }
+      if (!f.size) { toast('已跳过空文件：' + f.name, 'error'); continue; }
+      if (f.size > MAIL_MAX_BYTES) { toast('附件超过 20MB：' + f.name, 'error'); continue; }
+      if (totalSize() + f.size > MAIL_MAX_BYTES) { toast('全部附件合计不能超过 20MB', 'error'); break; }
+      const dup = picked.some(function (p) {
+        return p.name === f.name && p.size === f.size && p.lastModified === f.lastModified;
+      });
+      if (dup) continue;
+      picked.push(f);
+    }
+    ev.target.value = '';   /* 清空后才能再次选择同一个文件 */
+    renderPicked();
+  });
 
   $('#compose-cancel').addEventListener('click', closeModal);
   $('#compose-form').addEventListener('submit', async function (ev) {
@@ -705,9 +1084,20 @@ function openComposeModal() {
     const subject = $('#compose-subject').value.trim();
     const body = $('#compose-body').value;
     if (!to || !subject) { toast('请填写收件人和主题', 'error'); return; }
-    const data = await mailCall('send', { to: to, subject: subject, body: body });
-    if (!data) return;
-    toast(data.message || '邮件已发送', 'success');
+    const btn = ev.target.querySelector('button[type="submit"]');
+    if (btn) { btn.disabled = true; btn.textContent = '发送中…'; }
+    const result = await mailApi('send', { to: to, subject: subject, body: body }, picked);
+    if (btn) { btn.disabled = false; btn.textContent = '发送'; }
+    if (!result || result.ok !== true) {
+      toast((result && result.error) ? result.error : '发送失败，请稍后重试', 'error');
+      return;
+    }
+    const data = result.data || {};
+    if (data.saved === false) {
+      toast('邮件已发送，但存入「已发送」失败，可能无法在发件箱查看', 'error');
+    } else {
+      toast(data.message || '邮件已发送', 'success');
+    }
     closeModal();
     await refreshMailList(true);
     paintMail();
@@ -725,6 +1115,7 @@ const ROUTES = {
   docs: { title: '文档中心', render: renderDocs },
   contacts: { title: '通讯录', render: renderContacts },
   mail: { title: '邮件', render: renderMail },
+  security: { title: '安全防护 · DDoS 监控', render: renderSecurity },
   settings: { title: '系统设置', render: renderSettings }
 };
 
@@ -745,19 +1136,41 @@ function navigate() {
 
 /* ===================== 启动 ===================== */
 
-(function boot() {
-  const savedUser = sessionStorage.getItem('oa_user');
-  if (savedUser) enterApp(savedUser);
+(async function boot() {
+  /* 以服务端会话为准：刷新页面后仍保持登录 */
+  const me = await oaApi('me');
+  if (me.ok) {
+    await enterApp(me.data.user, me.data.role);
+  } else {
+    sessionStorage.removeItem('oa_user');
+  }
 
-  $('#login-form').addEventListener('submit', function (ev) {
+  $('#login-form').addEventListener('submit', async function (ev) {
     ev.preventDefault();
-    const user = $('#login-user').value.trim() || 'admin';
-    sessionStorage.setItem('oa_user', user);
-    toast('登录成功，欢迎回来，' + user, 'success');
-    enterApp(user);
+    const user = $('#login-user').value.trim().toLowerCase();
+    const pass = $('#login-pass').value;
+    if (!user || !pass) {
+      toast('请输入邮箱账号和密码');
+      return;
+    }
+    const btn = ev.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = '登录中…';
+    const res = await oaApi('login', { username: user, password: pass });
+    btn.disabled = false;
+    btn.textContent = '登 录';
+    if (!res.ok) {
+      toast(res.error || '登录失败', 'error');
+      $('#login-pass').value = '';
+      $('#login-pass').focus();
+      return;
+    }
+    toast('登录成功，欢迎回来，' + res.data.user, 'success');
+    await enterApp(res.data.user, res.data.role);
   });
 
-  $('#logout-btn').addEventListener('click', function () {
+  $('#logout-btn').addEventListener('click', async function () {
+    await oaApi('logout');
     toast('已退出登录');
     exitApp();
   });
@@ -766,6 +1179,6 @@ function navigate() {
   $('#modal-mask').addEventListener('click', closeModal);
 
   window.addEventListener('hashchange', function () {
-    if (sessionStorage.getItem('oa_user')) navigate();
+    if (OA.user) navigate();
   });
 })();

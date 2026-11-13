@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-#  服务端 192.168.1.137 一键安装系统依赖脚本（含校验）
+#  服务端 192.168.3.152 一键安装系统依赖脚本（含校验）
 #  依据: 配置.md —— 服务端职责: OA系统部署 + 防御DDoS部署 + 邮件系统部署
 #  系统: CentOS 7 / root
 # =============================================================================
@@ -18,13 +18,13 @@
 #    bash 1_server_deps.sh --check    # 仅校验（可重复执行）
 #
 #  可调环境变量:
-#    SERVER_IP=192.168.1.137  MAIL_DOMAIN=ddzt.old  PIP_INDEX=...
+#    SERVER_IP=192.168.3.152  MAIL_DOMAIN=ddzt.old  PIP_INDEX=...
 #  校验: 每个依赖均做 命令存在/版本/服务状态/端口监听/域名解析 检查，
 #        末尾输出 PASS/FAIL/WARN 汇总，存在 FAIL 时退出码非 0。
 # =============================================================================
 set -u
 
-SERVER_IP="${SERVER_IP:-192.168.1.137}"
+SERVER_IP="${SERVER_IP:-192.168.3.152}"
 MAIL_DOMAIN="${MAIL_DOMAIN:-ddzt.old}"
 PIP_INDEX="${PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 PIP_INDEX2="https://mirrors.aliyun.com/pypi/simple"
@@ -124,10 +124,12 @@ if [ "$CHECK_ONLY" = "0" ]; then
     mkdir -p /var/log/ddos && ok "/var/log/ddos 就绪"
 
     say "===== [3/5] [OA] Web/DB/PHP/JDK 依赖 ====="
-    yum install -y nginx mariadb-server mariadb \
-        php-fpm php php-cli php-mysql php-gd php-mbstring php-xml php-ldap php-opcache \
-        php-imap \
-        || warn "OA 依赖安装有失败项"
+    # 核心包失败即终止（yum 单事务全有或全无，混装会让 OA 整体没装上却只 warn）
+    yum install -y nginx mariadb-server mariadb php-fpm php php-cli php-mysql php-pdo \
+        || die "OA 核心依赖安装失败（检查本地 yum 源是否含 nginx/mariadb/php）"
+    # 扩展/可选包单独装，缺失只告警
+    yum install -y php-gd php-mbstring php-xml php-ldap php-opcache php-imap \
+        || warn "PHP 扩展安装有失败项（gd/mbstring/xml/ldap/opcache/imap 部分不可用）"
     yum install -y java-1.8.0-openjdk || warn "JDK1.8 安装失败（Java 型 OA 不可用）"
 
     say "===== [4/5] [邮件] postfix/dovecot/sasl/mailx（域名 $MAIL_DOMAIN）====="
@@ -138,19 +140,32 @@ if [ "$CHECK_ONLY" = "0" ]; then
     postconf -e 'inet_interfaces = all'
     systemctl restart postfix && ok "postfix inet_interfaces=all（LAN 可达）"
     # dovecot 默认 listen=*；如被改动过则恢复，保证 110/143 LAN 可达
-    if grep -qE '^\s*listen\s*=' /etc/dovecot/dovecot.conf \
-       && ! grep -qE '^\s*listen\s*=\s*\*' /etc/dovecot/dovecot.conf; then
-        sed -i 's/^\s*listen\s*=.*/listen = */' /etc/dovecot/dovecot.conf
-        systemctl restart dovecot && ok "dovecot listen=*（LAN 可达）"
+    # 用独立片段文件而不是 sed 改主配置（幂等、可回滚、不会误改注释示例）
+    if doveconf -n 2>/dev/null | grep -qE '^listen[[:space:]]*=[[:space:]]*\*'; then
+        ok "dovecot listen=*（LAN 可达）"
+    else
+        printf 'listen = *\n' > /etc/dovecot/conf.d/99-oa-listen.conf
+        systemctl restart dovecot && ok "dovecot listen=*（LAN 可达，片段 99-oa-listen.conf）" \
+            || warn "dovecot 重启失败，请检查 doveconf -n"
     fi
 
     say "===== [5/5] [内网域名] 写入 /etc/hosts（纯内网无公网 DNS）====="
+    # 先清掉这四个域名的旧映射（IP 变更后会残留旧地址），再统一写入当前 SERVER_IP
+    _hosts_tmp=$(mktemp)
+    if awk -v d1="$MAIL_DOMAIN" -v d2="mail.$MAIL_DOMAIN" \
+             -v d3="www.$MAIL_DOMAIN" -v d4="oa.$MAIL_DOMAIN" '
+        { keep=1
+          for (i=2; i<=NF; i++)
+              if ($i==d1 || $i==d2 || $i==d3 || $i==d4) keep=0
+          if (keep) print }
+    ' /etc/hosts > "$_hosts_tmp" && [ -s "$_hosts_tmp" ]; then
+        cat "$_hosts_tmp" > /etc/hosts
+    else
+        warn "整理 /etc/hosts 失败，保留原文件（可能残留旧域名映射）"
+    fi
+    rm -f "$_hosts_tmp"
     for d in "$MAIL_DOMAIN" "mail.$MAIL_DOMAIN" "www.$MAIL_DOMAIN" "oa.$MAIL_DOMAIN"; do
-        if grep -qE "[[:space:]]$d([[:space:]]|$)" /etc/hosts; then
-            ok "/etc/hosts 已含 $d"
-        else
-            echo "$SERVER_IP  $d" >> /etc/hosts && ok "写入 /etc/hosts: $SERVER_IP $d"
-        fi
+        echo "$SERVER_IP  $d" >> /etc/hosts && ok "写入 /etc/hosts: $SERVER_IP $d"
     done
 
     say "启动并设置开机自启（OA / 邮件 / DDoS 靶服务）"
@@ -170,7 +185,13 @@ if [ "$CHECK_ONLY" = "0" ]; then
         if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = "Enforcing" ]; then
             setenforce 0 && ok "SELinux 已临时设为 permissive"
         fi
-        sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config 2>/dev/null || true
+        if [ -f /etc/selinux/config ]; then
+            cp -a /etc/selinux/config "/etc/selinux/config.bak.$(date +%F-%H%M%S)"
+            sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config
+            grep -q '^SELINUX=permissive' /etc/selinux/config \
+                && ok "SELINUX 已持久化 permissive" \
+                || warn "SELINUX 持久化失败（/etc/selinux/config 未匹配 SELINUX=enforcing）"
+        fi
     fi
 fi
 
@@ -199,10 +220,11 @@ vver "mariadb" mysql --version
 vver "php"     php -v
 vcmd "php-fpm 可用" php-fpm -t
 vcmd "php mysql 扩展"    bash -c "php -m | grep -qi mysql"
+vcmd "php pdo_sqlite 扩展(文件共享需要)" bash -c "php -m | grep -qi pdo_sqlite"
 vcmd "php imap 扩展(webmail 需要)" bash -c "php -m | grep -qi imap"
 vcmd "php gd 扩展"       bash -c "php -m | grep -qi gd"
 vcmd "php mbstring 扩展" bash -c "php -m | grep -qi mbstring"
-vcmd "JDK1.8" java -version
+vcmd "JDK1.8" bash -c "java -version 2>&1 | grep -q '1\.8'"
 
 say "-- [邮件] 依赖 --"
 vver "postfix" postconf -d mail_version
@@ -221,10 +243,15 @@ vsvc nginx
 vsvc mariadb
 vsvc postfix
 vsvc dovecot
-vsvc redis
 vsvc vsftpd
 vsvc sshd
 vsvc php-fpm
+# redis 为 6379 爆破演示的可选组件：未安装只告警，不让整体校验失败
+if command -v redis-server >/dev/null 2>&1; then
+    vsvc redis
+else
+    warn "redis 未安装，跳过 6379 爆破演示依赖（不影响 OA/邮件/防护）"; WARNS=$((WARNS+1))
+fi
 
 say "-- [端口监听] --"
 vport 80   "nginx (OA/面板)"
@@ -233,13 +260,16 @@ vport 9000 "php-fpm"
 vport 25   "postfix SMTP (邮件)"
 vport 110  "dovecot POP3"
 vport 143  "dovecot IMAP"
-vport 6379 "redis (6379 爆破演示)"
+if command -v redis-server >/dev/null 2>&1; then
+    vport 6379 "redis (6379 爆破演示)"
+fi
 vport 21   "vsftpd (FTP 爆破演示)"
 vport 22   "sshd"
 
 say "-- [内网域名解析] --"
-vhosts "$MAIL_DOMAIN"
-vhosts "mail.$MAIL_DOMAIN"
+for _d in "$MAIL_DOMAIN" "mail.$MAIL_DOMAIN" "www.$MAIL_DOMAIN" "oa.$MAIL_DOMAIN"; do
+    vhosts "$_d"
+done
 
 say "-- [防火墙/SELinux] --"
 if systemctl is-active firewalld >/dev/null 2>&1; then
@@ -260,6 +290,9 @@ if ip -o -4 addr show 2>/dev/null | grep -q "inet $SERVER_IP/"; then
 else
     warn "本机 IP 不是 $SERVER_IP，请确认脚本部署对象"; WARNS=$((WARNS+1))
 fi
+
+# 角色标记：供 tools/net_sync.py 在 IP 变化后自动识别本机角色（勿删）
+[ -f /etc/ddzt-role ] || echo "server" > /etc/ddzt-role
 
 # =============================================================================
 #  三、汇总

@@ -4,28 +4,28 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ddzt.old 协同办公 OA</title>
-<link rel="stylesheet" href="static/style.css">
+<link rel="stylesheet" href="static/style.css?v=20261113g">
 </head>
 <body>
 
-<!-- ============ 登录页（纯前端演示） ============ -->
+<!-- ============ 登录页（服务端邮箱账号认证） ============ -->
 <div id="login-page" class="login-page">
   <div class="login-card">
     <div class="login-logo">🏢</div>
     <h1 class="login-title">ddzt.old 协同办公 OA</h1>
-    <p class="login-sub">内网协同办公平台 · 演示展示版</p>
+    <p class="login-sub">内网协同办公平台</p>
     <form id="login-form" autocomplete="off">
       <div class="form-field">
-        <label for="login-user">账号</label>
-        <input id="login-user" type="text" placeholder="演示系统：任意账号可登录">
+        <label for="login-user">邮箱账号</label>
+        <input id="login-user" type="text" placeholder="例如：eva@ddzt.old" autocomplete="username" inputmode="email">
       </div>
       <div class="form-field">
         <label for="login-pass">密码</label>
-        <input id="login-pass" type="password" placeholder="演示系统：任意账号可登录">
+        <input id="login-pass" type="password" placeholder="请输入密码" autocomplete="current-password">
       </div>
       <button type="submit" class="btn btn-primary btn-block">登 录</button>
     </form>
-    <p class="login-tip">🔐 演示系统：任意账号可登录</p>
+    <p class="login-tip">🔐 请使用邮箱账号登录（如 eva@ddzt.old）</p>
   </div>
 </div>
 
@@ -48,6 +48,7 @@
       <a href="#/docs" class="nav-item" data-route="docs"><span class="nav-icon">📁</span>文档中心</a>
       <a href="#/contacts" class="nav-item" data-route="contacts"><span class="nav-icon">📇</span>通讯录</a>
       <a href="#/mail" class="nav-item" data-route="mail"><span class="nav-icon">✉️</span>邮件</a>
+      <a href="#/security" class="nav-item" data-route="security"><span class="nav-icon">🛡️</span>安全防护</a>
       <a href="#/settings" class="nav-item" data-route="settings"><span class="nav-icon">⚙️</span>系统设置</a>
     </nav>
     <div class="sidebar-foot">内网演练环境 · v1.0</div>
@@ -57,7 +58,7 @@
     <header class="topbar">
       <div class="topbar-title" id="topbar-title">工作台</div>
       <div class="topbar-right">
-        <span class="topbar-user">👤 当前用户：<strong id="current-user">—</strong></span>
+        <span class="topbar-user">👤 当前用户：<strong id="current-user">—</strong><span id="role-tag" class="role-tag role-user">只读用户</span></span>
         <button id="logout-btn" class="btn btn-ghost">🚪 退出登录</button>
       </div>
     </header>
@@ -80,6 +81,7 @@
 <!-- ============ Toast 容器 ============ -->
 <div id="toast-box" class="toast-box"></div>
 
-<script src="static/app.js"></script>
+<script src="static/app.js?v=20261113g"></script>
 </body>
 </html>
+

@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-#  靶机 192.168.1.137 一键关闭与清理脚本（CentOS 7 / root）
+#  靶机 192.168.3.152 一键关闭与清理脚本（CentOS 7 / root）
 # =============================================================================
 #  功能:
 #    默认        : 1) 停止并禁用 ddos-agent 服务
@@ -155,6 +155,7 @@ if [ "$PURGE" = "1" ]; then
         [ -d "$APP_DIR" ]   && dry "rm -rf $APP_DIR"
         [ -d "$LOG_DIR" ]   && dry "rm -rf $LOG_DIR（含 blocks.jsonl 等审计日志）"
         dry "userdel test（若存在）"
+        dry "rm -rf /etc/ddos /etc/ddzt-role（白名单与角色标记）"
         grep -q 'log_format ddos' "$NGINX_CONF" 2>/dev/null && dry "从 $NGINX_BAK 恢复 nginx.conf 并 reload"
     else
         if [ -f "$UNIT_FILE" ]; then
@@ -168,6 +169,12 @@ if [ "$PURGE" = "1" ]; then
         fi
         if id test >/dev/null 2>&1; then
             userdel test 2>/dev/null && ok "演示账户 test 已删除" || warn "test 账户删除失败"
+        fi
+        if [ -d /etc/ddos ]; then
+            rm -rf /etc/ddos && ok "已删除 /etc/ddos（whitelist/target）"
+        fi
+        if [ -f /etc/ddzt-role ]; then
+            rm -f /etc/ddzt-role && ok "已删除角色标记 /etc/ddzt-role"
         fi
         if grep -q 'log_format ddos' "$NGINX_CONF" 2>/dev/null; then
             if [ -f "$NGINX_BAK" ]; then

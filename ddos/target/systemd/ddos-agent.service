@@ -11,7 +11,7 @@ Environment=DDOS_PANEL=/opt/ddos/index.html
 ExecStart=/usr/bin/python3 /opt/ddos/agent.py
 Restart=always
 RestartSec=3
-# agent 需�?iptables 与原始套接字
+# agent 需要 iptables 与原始套接字
 KillMode=mixed
 TimeoutStopSec=10
 

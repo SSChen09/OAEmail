@@ -10,7 +10,7 @@
 | 文件 | 角色 | 说明 |
 |---|---|---|
 | [target/agent.py](target/agent.py) | 靶机 | 4 线程（sniff / nginx tail / secure tail / blocker）+ Flask API |
-| [target/index.html](target/index.html) | 靶机 | 独立面板页（深色主题，2s 轮询，解封按钮 / 自动开关 / **流量统计图表与分类**） |
+| [target/index.html](target/index.html) | 靶机 | 独立面板页（与 OA 一致的浅色主题，2s 轮询，解封按钮 / 自动开关 / **流量统计图表与分类**；`?embed=1` 嵌入 OA 时隐藏侧栏） |
 | [target/nginx/ddos.conf](target/nginx/ddos.conf) | 靶机 | `log_format ddos` + `access_log` 片段（放入 `http{}`） |
 | [target/systemd/ddos-agent.service](target/systemd/ddos-agent.service) | 靶机 | 常驻服务 |
 | [target/1_setup_target.sh](target/1_setup_target.sh) | 靶机 | **一键**装依赖（nginx/sshd/vsftpd/scapy/flask）、配日志、部署、起服务 |
@@ -27,66 +27,60 @@
 
 1. **分发**（Windows 开发机 → 三台 Linux）：
    ```bash
-   scp -r ddos/target/*   root@192.168.1.137:/opt/ddos-setup/
-   scp -r ddos/attacker/* root@192.168.1.232:/opt/ddos-setup/
-   scp -r ddos/admin/*    root@192.168.1.130:/opt/ddos-setup/
+   scp -r ddos/target/*   root@192.168.3.152:/opt/ddos-setup/
+   scp -r ddos/attacker/* root@192.168.3.153:/opt/ddos-setup/
+   scp -r ddos/admin/*    root@192.168.3.155:/opt/ddos-setup/
    ```
-2. **靶机**：`bash /opt/ddos-setup/1_setup_target.sh` → 浏览器开 `http://192.168.1.137:5000/`
+2. **靶机**：`bash /opt/ddos-setup/1_setup_target.sh` → 浏览器开 `http://192.168.3.152:5000/`
+   （OA 部署后也可从 OA 左侧「🛡️ 安全防护」进入，或 `http://ddzt.old/ddos/`，见下文「面板已接入 OA」）
 3. **攻击机**：`bash /opt/ddos-setup/2_setup_attacker.sh`
 4. **管理机**：`bash /opt/ddos-setup/3_setup_admin.sh`（验证 API 与解封命令）
 5. **验证流程**（先关防护跑基线，再开防护重跑）：
    ```bash
    ddos-attack dry-run
-   curl -X POST http://192.168.1.137:5000/api/auto -H 'Content-Type: application/json' -d '{"enabled":false}'
+   curl -X POST http://192.168.3.152:5000/api/auto -H 'Content-Type: application/json' -d '{"enabled":false}'
    ddos-attack multi-port --mp-rate 50 --duration 20
    ddos-attack brute --brute-kinds ssh,ftp,redis,telnet --duration 40
    ddos-attack mixed --syn-procs 4 --syn-rate 200 --udp-procs 2 --udp-rate 200 \
               --http-threads 20 --mp-rate 50 --brute-kinds ssh --duration 40
-   curl -X POST http://192.168.1.137:5000/api/auto -H 'Content-Type: application/json' -d '{"enabled":true}'
+   curl -X POST http://192.168.3.152:5000/api/auto -H 'Content-Type: application/json' -d '{"enabled":true}'
    # 重复上述三条命令，在面板观察“被屏蔽 IP”与速率回落
    ```
-   顺序：**先爆破/扫描（真实 IP，会被全端口封 60s），再伪造源 flood**。
+   顺序：**先爆破/扫描（真实 IP；扫描源会被全端口封 60s），再伪造源 flood**。
 
-## 网络前提：三台 IP 必须固定（部署前确认）
+## 网络前提：IP 变了怎么办（DHCP 也安全）
 
-白名单、`--target` 默认值、面板地址、封禁审计都绑定三台机器的 IP；
-**IP 一变（DHCP 重新分配、快照回滚、重建网卡）白名单就失效**：管理机可能被自封、攻击打错目标。
-部署前先确认是固定 IP 还是自动获取：
+早期版本把 IP 写死在白名单 / 攻击目标里，DHCP 一变就全线失配。现版本改为**运行时读配置**：
 
-```bash
-# 靶机/攻击机（CentOS 7）：BOOTPROTO=dhcp = 自动获取；none/static + IPADDR = 固定
-grep -iE 'bootproto|ipaddr|netmask|gateway' /etc/sysconfig/network-scripts/ifcfg-eth0
-journalctl -u NetworkManager --no-pager | grep -i dhcp | tail -5   # 有租约记录 = 自动获取
+- 服务端白名单：`agent.py` 启动时加载 `/etc/ddos/whitelist.txt`（每行一个 IP 或 CIDR，`#` 注释）；
+- 攻击端目标：`attacker.py` 与 `ddos-attack` 运行时依次读 `/etc/ddos/target` → `/etc/hosts` 的 `ddzt.old` → 内置兜底值；
+- 三台 `/etc/hosts` 的 ddzt.old 四域名映射由部署脚本重建。
 
-# 管理机（任意 Linux）
-ip -4 addr show
+**IP 变化后的标准动作**（Windows 侧，约 30 秒）：
+
+```powershell
+python tools\net_sync.py            # 预览：扫描网段识别 server/client/attacker，列出要改的文件
+python tools\net_sync.py --apply    # 执行：改仓库 + 远程刷新 hosts/白名单/target + 重启 ddos-agent
 ```
 
-确认是自动获取时二选一：
+工具按 `/etc/ddzt-role` 标记识别角色（部署脚本自动写入），无法扫描时用
+`--map server=IP,client=IP,attacker=IP` 手工指定；扫描不到的机器默认按「IP 未确认」中止，确认没变时加 `--allow-stale`。
 
-1. **改成固定（推荐，比赛环境就该这样）**
-   - 路由器/虚拟网络编辑器上做 DHCP 保留（MAC 绑定），机器不用动；
-   - 或机器内配静态：`ifcfg-eth0` 改 `BOOTPROTO=none` + `IPADDR/NETMASK/GATEWAY`，
-     然后 `systemctl restart network`。
-   - ⚠️ 改网络配置会断 SSH，建议在虚拟机控制台操作。
-2. **临时覆盖（IP 每次都可能变时）**：把当前 IP 用环境变量传给部署脚本——
+**仍推荐做 DHCP 保留（MAC 绑定）**，把三台 IP 钉死，避免每次开赛都同步。
 
-   ```bash
-   ADMIN_IP=192.168.1.x SSR_IP=192.168.1.y bash 1_setup_target.sh   # 靶机（自动 sed 进 agent.py 白名单）
-   TARGET_IP=192.168.1.z bash 2_setup_attacker.sh                    # 攻击机（或 ddos-attack --target …）
-   TARGET_IP=192.168.1.z bash 3_setup_admin.sh                       # 管理机
-   ```
+部署时若 IP 与默认值不同，也可直接用环境变量覆盖：
 
-   当前版本的限制：`1_setup_target.sh` 的 `TARGET_IP` 是写死的默认值，
-   **靶机自身 IP 不同**时需手动改两处——`1_setup_target.sh` 的 `TARGET_IP` 与
-   `agent.py` 白名单第一行（靶机自身）。`ADMIN_IP`/`SSR_IP`/攻击机与管理机的
-   `TARGET_IP` 均可用环境变量覆盖，无需改代码。
+```bash
+ADMIN_IP=192.168.3.x SSR_IP=192.168.3.y bash 1_setup_target.sh   # 靶机（写入 WHITELIST 与 /etc/ddos/whitelist.txt）
+TARGET_IP=192.168.3.z bash 2_setup_attacker.sh                    # 攻击机（写入 /etc/ddos/target）
+TARGET_IP=192.168.3.z bash 3_setup_admin.sh                       # 管理机
+```
 
-三台 IP 固定后，本 README 与 `ddos.md`、脚本默认值即与实际一致，直接照「快速开始」执行。
+（不再需要手改 `1_setup_target.sh` 的 `TARGET_IP` 或 `agent.py` 里的白名单行。）
 
 ## 攻击机命令参考（attacker.py）
 
-入口：`python3 attacker.py [参数]`（攻击机 137 上也可用 `ddos-attack`，等价 `python3 /opt/ddos/attacker.py`；
+入口：`python3 attacker.py [参数]`（攻击机 153 上也可用 `ddos-attack`，等价 `python3 /opt/ddos/attacker.py`；
 依赖 scapy/requests/paramiko 装在 **python3.6.8**，务必用 `python3` 而不是 `python`）。
 
 ### 模式（`--mode`）
@@ -105,7 +99,7 @@ ip -4 addr show
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--target` | `192.168.1.137` | 靶机 IP（内置只允许内网） |
+| `--target` | `192.168.3.152` | 靶机 IP（内置只允许内网） |
 | `--mode` | `mixed` | 见上表 |
 | `--port` | `80` | SYN/UDP/HTTP 目的端口 |
 | `--ports` | 内置 23 端口 | multi-port 端口列表，如 `21,22,80,6379` |
@@ -118,30 +112,30 @@ ip -4 addr show
 | `--pkt-size` | `0` | 发包载荷大小（MB，0~16）；0=默认小包，见《自定义发包大小》 |
 | `--brute-kinds` | `ssh,ftp` | 爆破类型：`ssh,ftp,redis,telnet` 任意组合 |
 | `--brute-interval` | `0.2` | 爆破每次尝试间隔（秒） |
-| `--src-ips` | 空 | 源 IP 池，逗号分隔，元素可为范围（`192.168.1.233,192.168.1.235-240`） |
-| `--src-range` | 空 | 源 IP 范围（`192.168.1.233-240` 或全写），与 `--src-ips` 可混用 |
+| `--src-ips` | 空 | 源 IP 池，逗号分隔，元素可为范围（`192.168.3.233,192.168.3.235-240`） |
+| `--src-range` | 空 | 源 IP 范围（`192.168.3.233-240` 或全写），与 `--src-ips` 可混用 |
 | `--duration` | `30` | 持续时间（秒） |
 
 ### 常用组合示例
 
 ```bash
 # 看计划（不发包）：源 IP 分配 + 拆包计划
-python3 attacker.py --mode dry-run --src-range 192.168.1.233-235 --pkt-size 1
+python3 attacker.py --mode dry-run --src-range 192.168.3.233-235 --pkt-size 1
 
 # 多源 HTTP 洪泛 30s（真实源 IP，需先 add_ips.sh add）
-python3 attacker.py --mode http --http-threads 4 --src-ips 192.168.1.233,192.168.1.234 --duration 30
+python3 attacker.py --mode http --http-threads 4 --src-ips 192.168.3.233,192.168.3.234 --duration 30
 
 # 大包 UDP 洪泛：1MB/包，5 pps，打 53 端口
-python3 attacker.py --mode udp --port 53 --pkt-size 1 --udp-rate 5 --src-ips 192.168.1.233 --duration 15
+python3 attacker.py --mode udp --port 53 --pkt-size 1 --udp-rate 5 --src-ips 192.168.3.233 --duration 15
 
-# SSH+FTP 爆破（真实握手，触发全端口封禁演示）
-python3 attacker.py --mode brute --brute-kinds ssh,ftp --src-ips 192.168.1.233 --duration 20
+# SSH+FTP 爆破（真实握手，触发爆破封禁：只封 tcp/22）
+python3 attacker.py --mode brute --brute-kinds ssh,ftp --src-ips 192.168.3.233 --duration 20
 
 # 多端口扫描（伪造源）
 python3 attacker.py --mode multi-port --ports 21,22,80,443,3306,6379 --mp-rate 50 --duration 20
 
 # 组合攻击 40s
-python3 attacker.py --mode mixed --src-range 192.168.1.233-234 --duration 40
+python3 attacker.py --mode mixed --src-range 192.168.3.233-234 --duration 40
 ```
 
 > 提示：`--src-ips/--src-range` 里 http/brute 用的 IP 必须先绑定到本机网卡（`bash add_ips.sh add …`），
@@ -153,16 +147,16 @@ python3 attacker.py --mode mixed --src-range 192.168.1.233-234 --duration 40
 
 ```bash
 # 1) 在网卡上绑定同网段别名 IP（默认探测去往靶机的网卡；--persist 写 ifcfg 持久化）
-bash add_ips.sh add 192.168.1.233-235            # 支持范围简写/全写、逗号分隔
+bash add_ips.sh add 192.168.3.233-235            # 支持范围简写/全写、逗号分隔
 bash add_ips.sh list
-bash add_ips.sh del 192.168.1.235                # 实验后删除别名
+bash add_ips.sh del 192.168.3.235                # 实验后删除别名
 
 # 2) 攻击时指定源 IP 池
-ddos-attack http  --src-ips 192.168.1.233,192.168.1.234 --http-threads 4 --duration 30
-ddos-attack brute --src-range 192.168.1.233-234 --brute-kinds ssh --duration 20
+ddos-attack http  --src-ips 192.168.3.233,192.168.3.234 --http-threads 4 --duration 30
+ddos-attack brute --src-range 192.168.3.233-234 --brute-kinds ssh --duration 20
 ```
 
-- `--src-ips` / `--src-range` 可混用；范围支持简写末段（`192.168.1.233-235`）或全写。
+- `--src-ips` / `--src-range` 可混用；范围支持简写末段（`192.168.3.233-235`）或全写。
 - **http / brute** 轮询**绑定真实源 IP**（需先 `add_ips.sh add`，否则启动即报错并提示缺哪些）；
   **syn / udp / multi-port** 是 scapy 伪造源，从池中随机抽取发包，不需要绑定。
 - dry-run 会打印源 IP 池分配计划，并只警告未绑定的 IP。
@@ -172,9 +166,9 @@ ddos-attack brute --src-range 192.168.1.233-234 --brute-kinds ssh --duration 20
 `--pkt-size` 按 **MB** 设定每个逻辑包的载荷大小（浮点，0~16，默认 0 = 原小包）：
 
 ```bash
-ddos-attack udp  --pkt-size 1   --udp-rate 5 --port 53 --src-ips 192.168.1.233 --duration 15
-ddos-attack syn  --pkt-size 0.5 --syn-rate 10 --src-ips 192.168.1.233 --duration 15
-ddos-attack http --pkt-size 2   --http-threads 2 --src-ips 192.168.1.233 --duration 15
+ddos-attack udp  --pkt-size 1   --udp-rate 5 --port 53 --src-ips 192.168.3.233 --duration 15
+ddos-attack syn  --pkt-size 0.5 --syn-rate 10 --src-ips 192.168.3.233 --duration 15
+ddos-attack http --pkt-size 2   --http-threads 2 --src-ips 192.168.3.233 --duration 15
 ```
 
 - **syn / udp**：载荷超过单包上限（TCP 65495 / UDP 65507 字节）自动拆成多个报文，
@@ -191,12 +185,12 @@ ddos-attack http --pkt-size 2   --http-threads 2 --src-ips 192.168.1.233 --durat
 实验结束后分别在两台机器上执行（先攻击机后靶机，确保无发包进程再清封禁）：
 
 ```bash
-# 攻击机 192.168.1.232
+# 攻击机 192.168.3.153
 bash 5_cleanup_attacker.sh                # 停 attacker 进程 + 清临时脚本
 bash 5_cleanup_attacker.sh --purge        # 连 /opt/ddos、ddos-attack 一起删
-bash add_ips.sh del 192.168.1.233-235 --persist   # 如用过别名 IP，删掉它们（含 ifcfg）
+bash add_ips.sh del 192.168.3.233-235 --persist   # 如用过别名 IP，删掉它们（含 ifcfg）
 
-# 靶机 192.168.1.137
+# 靶机 192.168.3.152
 bash 5_cleanup_target.sh                  # 停 agent + 清 DDoS_BLOCK 封禁规则
 bash 5_cleanup_target.sh --purge          # 连 systemd 单元、/opt/ddos、日志、test 账户一起删
 ```
@@ -214,10 +208,10 @@ bash 5_cleanup_target.sh --purge          # 连 systemd 单元、/opt/ddos、日
 | `UDP_RATE_TH` | 80 | 单源 53/udp pps 阈值 |
 | `HTTP_RATE_TH` | 20 | 单源 HTTP req/s 阈值 |
 | `SCAN_PORT_TH` | 10 | 5s 内不同端口数阈值（超即全端口封） |
-| `BRUTE_TH` | 5 | 60s 内 SSH 失败次数阈值（超即全端口封） |
+| `BRUTE_TH` | 5 | 60s 内 SSH 失败次数阈值（超即封 tcp/22） |
 | `BLOCK_TTL` | 60 | 封禁自动解除秒数 |
 | `MAX_BLOCKED` | 200 | 同时封禁上限 |
-| `WHITELIST` | 127.0.0.1 / .232 / .130 / .137 | 永不封禁（**.130 管理机、.232 备用客户端必须在内**） |
+| `WHITELIST` | 127.0.0.1 + `/etc/ddos/whitelist.txt` | 永不封禁；文件每行一个 IP/CIDR（.152 靶机、.153 攻击机、.154 管理机由部署脚本写入） |
 
 运行时也可用命令行覆盖：
 `--iface ens33 --port 5000 --syn-rate 100 --ttl 120 --no-auto --no-cleanup --panel /opt/ddos/index.html`
@@ -245,6 +239,20 @@ bash 5_cleanup_target.sh --purge          # 连 systemd 单元、/opt/ddos、日
 - 来源速率三表、端口分布、扫描/爆破、被屏蔽 IP（含解封按钮）、最近事件
 - 自动屏蔽开关、断线重连提示、页面回前台立即刷新
 
+## 面板已接入 OA（同源反代）
+
+OA 站点（`deploy/4_oa_mail_setup.sh` 生成的 `oa.conf`）新增了 `/ddos/` 反代到 `127.0.0.1:5000`，因此：
+
+| 访问方式 | 地址 | 说明 |
+|---|---|---|
+| OA 内置页 | `http://ddzt.old/#/security` | 左侧「🛡️ 安全防护」，iframe 内嵌，带刷新/新窗口按钮 |
+| 同源面板 | `http://ddzt.old/ddos/` | 无 OA 外壳；`?embed=1` 隐藏面板自带标题/页脚 |
+| 直连 agent | `http://192.168.3.152:5000/` | 原方式，仍需 5000 端口与白名单 |
+
+- 面板前端 API 已改为**相对路径**（`api/stats`），直连 `:5000` 与经 `/ddos/` 反代都能用。
+- 反代请求源是 `127.0.0.1`，天然在白名单，不会再出现「面板把自己封了」。
+- 只改 nginx 与前端，`agent.py` 无需改动；`net_sync` 换 IP 后依然只需一条命令。
+
 ## 日志 `/var/log/ddos/*.jsonl`
 
 `packets.jsonl`(ts,src,proto,dport) · `http.jsonl`(ts,remote,xff,method,path,status,ua) ·
@@ -252,7 +260,7 @@ bash 5_cleanup_target.sh --purge          # 连 systemd 单元、/opt/ddos、日
 
 ## 安全约束（已内置）
 
-- flood 封禁规则只含 `tcp/80`、`udp/53`，**永不碰 SSH 22**；全端口 DROP 仅对判定为扫描/爆破的源。
+- flood 封禁规则只含 `tcp/80`、`udp/53`，**永不碰 SSH 22**；全端口 DROP 仅对判定为端口扫描的源，爆破源只封 `tcp/22`。
 - 白名单来源永不被封；攻击机 / 管理机可自行决定是否从白名单移除。
 - 伪造源 IP 仅限内网短时；HTTP 层只伪造 `X-Forwarded-For`，面板按 `remote_addr` 统计。
 - `MAX_BLOCKED` 上限 + `BLOCK_TTL` 自动解封，避免规则堆积。

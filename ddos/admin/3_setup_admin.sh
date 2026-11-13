@@ -1,8 +1,8 @@
 #!/bin/bash
 # =============================================================================
-#  管理机 192.168.1.130 一键环境脚本（任意 Linux 发行版 / 需 root 或 sudo）
+#  管理机 192.168.3.155 一键环境脚本（任意 Linux 发行版 / 需 root 或 sudo）
 # =============================================================================
-#  管理机职责: 只用浏览器访问靶机面板 http://192.168.1.137:5000/
+#  管理机职责: 只用浏览器访问靶机面板（http://ddzt.old/ddos/ 或 http://192.168.3.152:5000/）
 #  本脚本做四件事:
 #    1. 纯管理机：只校验连通性（不装攻击/防护组件）
 #    2. 可选 --tools : 安装 curl / jq / tcpdump / python（py3 优先，回退 py2）/ requests（便于用 API 验证）
@@ -14,12 +14,12 @@
 #    bash 3_setup_admin.sh --tools    # 安装客户端工具后自检
 #
 #  可调环境变量:
-#    TARGET_IP=192.168.1.137
+#    TARGET_IP=192.168.3.152
 #    PANEL_PORT=5000
 # =============================================================================
 set -u
 
-TARGET_IP="${TARGET_IP:-192.168.1.137}"
+TARGET_IP="${TARGET_IP:-192.168.3.152}"
 PANEL_PORT="${PANEL_PORT:-5000}"
 INSTALL_TOOLS=0
 [ "${1:-}" = "--tools" ] && INSTALL_TOOLS=1
@@ -53,11 +53,13 @@ say "===== 管理机环境检查（靶机 $TARGET_IP）====="
 # ---------------------------- 1. 本机 IP 提示 --------------------------------
 MY_IPS=$(ip -o -4 addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | tr '\n' ' ')
 say "本机 IPv4: $MY_IPS"
-case " $MY_IPS " in
-    *192.168.1.130*) ok "本机即约定的管理机（客户端）192.168.1.130" ;;
-    *192.168.1.232*) ok "本机是备用客户端（攻击端）192.168.1.232，同样已加入 WHITELIST" ;;
-    *) warn "本机不是 192.168.1.130 / 192.168.1.232；请确认该 IP 已加入靶机 WHITELIST（否则会被封）" ;;
-esac
+MY_IP=$(echo "$MY_IPS" | awk '{print $1}')
+if [ -n "$MY_IP" ]; then
+    ok "本机主 IP: $MY_IP"
+    warn "请确认该 IP 已写入靶机 /etc/ddos/whitelist.txt，否则正常访问也可能被判为攻击源"
+else
+    warn "未取到本机 IPv4，请检查网卡配置"
+fi
 
 # ---------------------------- 2. 可选工具 ------------------------------------
 if [ "$INSTALL_TOOLS" = "1" ]; then
@@ -114,24 +116,34 @@ else
 fi
 
 say "检查靶机 Nginx (80)"
-CODE=$(curl -s -m 4 -o /dev/null -w "%{http_code}" "http://$TARGET_IP/" || echo "000")
-if [ "$CODE" != "000" ] && [ -n "$CODE" ]; then
+# 注意：curl 失败时 -w 已输出 000，不能再 `|| echo 000`，否则得到两行 "000\n000"，
+# 后面的 [ "$CODE" != "000" ] 会误判为可达。
+CODE=$(curl -s -m 4 -o /dev/null -w "%{http_code}" "http://$TARGET_IP/" 2>/dev/null) || CODE=""
+[ -n "$CODE" ] || CODE="000"
+if [ "$CODE" != "000" ]; then
     ok "80 端口 HTTP 状态码 $CODE"
 else
     warn "80 端口不可达"
 fi
 
-say "检查靶机面板 (:$PANEL_PORT)"
-STATS=$(curl -s -m 4 "http://$TARGET_IP:$PANEL_PORT/api/stats" || true)
+say "检查靶机面板 (:$PANEL_PORT 或 80/ddos/ 反代)"
+STATS=$(curl -s -m 4 "http://$TARGET_IP:$PANEL_PORT/api/stats" 2>/dev/null || true)
+if ! echo "$STATS" | grep -q '"ts"'; then
+    # 直连 5000 被防火墙挡住时，回退到 Nginx 同源反代
+    STATS=$(curl -s -m 4 "http://$TARGET_IP/ddos/api/stats" 2>/dev/null || true)
+    [ -n "$STATS" ] && PANEL_URL="http://$TARGET_IP/ddos/"
+else
+    PANEL_URL="http://$TARGET_IP:$PANEL_PORT/"
+fi
 if echo "$STATS" | grep -q '"ts"'; then
-    ok "面板 API 正常"
+    ok "面板 API 正常（$PANEL_URL）"
     if command -v jq >/dev/null 2>&1; then
         echo "$STATS" | jq -c '{ts, auto, blocked:(.blocked|length), events:(.events|length)}'
     else
         echo "$STATS" | head -c 300; echo
     fi
 else
-    warn "面板 API 不可达：请确认靶机 agent 已启动、且本机 IP 在 WHITELIST 中"
+    warn "面板 API 不可达：请确认靶机 agent 已启动、本机 IP 在 /etc/ddos/whitelist.txt 中"
 fi
 
 # ---------------------------- 4. 输出验证命令 --------------------------------
@@ -139,20 +151,20 @@ say "===== 常用验证命令（复制执行）====="
 cat <<EOF
 
  # 打开面板
-   http://$TARGET_IP:$PANEL_PORT/
+   ${PANEL_URL:-http://$TARGET_IP:$PANEL_PORT/}
 
  # 查看统计（格式化）
-   curl -s http://$TARGET_IP:$PANEL_PORT/api/stats | ${PY:-python3} -m json.tool
-   curl -s http://$TARGET_IP:$PANEL_PORT/api/stats | jq '.blocked, .events[:5]'
+   curl -s ${PANEL_URL:-http://$TARGET_IP:$PANEL_PORT/}api/stats | ${PY:-python3} -m json.tool
+   curl -s ${PANEL_URL:-http://$TARGET_IP:$PANEL_PORT/}api/stats | jq '.blocked, .events[:5]'
 
- # 手动解封
-   curl -X POST http://$TARGET_IP:$PANEL_PORT/api/unblock \\
-        -H 'Content-Type: application/json' -d '{"ip":"192.168.1.232"}'
+ # 手动解封（把 IP 换成面板“被屏蔽”表里的地址）
+   curl -X POST ${PANEL_URL:-http://$TARGET_IP:$PANEL_PORT/}api/unblock \\
+        -H 'Content-Type: application/json' -d '{"ip":"<被封IP>"}'
 
  # 关闭 / 开启自动屏蔽（基线测试 / 防护测试切换）
-   curl -X POST http://$TARGET_IP:$PANEL_PORT/api/auto \\
+   curl -X POST ${PANEL_URL:-http://$TARGET_IP:$PANEL_PORT/}api/auto \\
         -H 'Content-Type: application/json' -d '{"enabled":false}'
-   curl -X POST http://$TARGET_IP:$PANEL_PORT/api/auto \\
+   curl -X POST ${PANEL_URL:-http://$TARGET_IP:$PANEL_PORT/}api/auto \\
         -H 'Content-Type: application/json' -d '{"enabled":true}'
 
  # 持续观察（每 2 秒刷新一行摘要）
@@ -164,4 +176,6 @@ cat <<EOF
    tail -f /var/log/ddos/blocks.jsonl
 
 EOF
+# 角色标记：供 tools/net_sync.py 在 IP 变化后自动识别本机角色（勿删）
+$SUDO sh -c 'echo "client" > /etc/ddzt-role' 2>/dev/null || warn "写入 /etc/ddzt-role 失败（非 root？不影响使用）"
 ok "管理机检查完成"

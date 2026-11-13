@@ -1,13 +1,20 @@
-# 忽略所有以 . 开头的文件夹（任意层级）
 .*/
 
-# 但 node_modules 里的 .pnpm、.bin 等是依赖本体，需要提交
+# npm
 **/node_modules/**
 netlab/.npmrc
-tools/__pycache__
+
+# Python
 _py2lint.py
 _pycompat.py
-比赛
 ddos/_testlog
 ddos/_selftest.py
-ddos/attacker/__pycache__
+
+# __pycache__
+#ddos/attacker/__pycache__
+#ddos/__pycache__
+#ddos/common/__pycache__
+#ddos/target/__pycache__
+#tools/__pycache__
+
+比赛
