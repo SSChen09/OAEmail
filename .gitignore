@@ -10,3 +10,4 @@ _pycompat.py
 比赛
 ddos/_testlog
 ddos/_selftest.py
+ddos/attacker/__pycache__
