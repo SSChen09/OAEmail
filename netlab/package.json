@@ -1,0 +1,1 @@
+{"name":"netlab","private":true,"version":"1.0.0","dependencies":{"asn1":"^0.2.6","bcrypt-pbkdf":"^1.0.2","safer-buffer":"^2.1.2","ssh2":"^1.17.0","tweetnacl":"^1.0.3"}}

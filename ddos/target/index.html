@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+   DDoS 检测与自动封禁 —— 监控面板（单文件，深色主题，每 2s 轮询 /api/stats）
+   部署位置: /opt/ddos/index.html （与 agent.py 同目录，可用 DDOS_PANEL 覆盖）
+   访问方式: http://192.168.1.137:5000/
+  ============================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DDoS 流量监控与自动过滤面板 · 192.168.1.137</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2129; --line:#30363d;
+    --fg:#c9d1d9; --dim:#8b949e; --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font:13px/1.5 "Consolas","Menlo","DejaVu Sans Mono","Microsoft YaHei",monospace;
+  }
+  a{color:var(--acc);text-decoration:none;}
+  .wrap{max-width:1500px;margin:0 auto;padding:14px 18px 40px;}
+
+  /* ---------- 标题栏 ---------- */
+  header{
+    display:flex;flex-wrap:wrap;align-items:center;gap:14px;
+    padding:12px 16px;background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    position:sticky;top:0;z-index:10;
+  }
+  header h1{font-size:16px;margin:0;letter-spacing:.5px;}
+  header .sub{color:var(--dim);font-size:12px;}
+  .spacer{flex:1;}
+  .pill{
+    padding:3px 10px;border-radius:12px;border:1px solid var(--line);font-size:12px;background:var(--panel2);
+  }
+  .pill.on{color:var(--ok);border-color:var(--ok);}
+  .pill.off{color:var(--warn);border-color:var(--warn);}
+  #clock{color:var(--acc);font-size:15px;font-weight:bold;}
+  button{
+    cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--fg);
+    border-radius:6px;padding:5px 12px;font:inherit;
+  }
+  button:hover{border-color:var(--acc);color:var(--acc);}
+  button.danger:hover{border-color:var(--bad);color:var(--bad);}
+  button.small{padding:2px 8px;font-size:12px;}
+
+  /* ---------- 卡片 / 网格 ---------- */
+  .grid{display:grid;gap:14px;margin-top:14px;}
+  .g3{grid-template-columns:repeat(3,minmax(0,1fr));}
+  .g2{grid-template-columns:repeat(2,minmax(0,1fr));}
+  @media(max-width:1100px){.g3,.g2{grid-template-columns:1fr;}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;}
+  .card h2{
+    margin:0;padding:8px 12px;font-size:13px;font-weight:600;background:var(--panel2);
+    border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;
+  }
+  .card h2 .tag{font-size:11px;color:var(--dim);font-weight:normal;}
+  .body{max-height:320px;overflow:auto;}
+
+  /* ---------- 表格 ---------- */
+  table{width:100%;border-collapse:collapse;}
+  th,td{border:1px solid var(--line);padding:5px 8px;text-align:left;white-space:nowrap;}
+  th{position:sticky;top:0;background:#222831;color:var(--dim);font-weight:600;z-index:1;}
+  td.num,th.num{text-align:right;}
+  tbody tr:hover{background:#1b2230;}
+  .empty td{color:var(--dim);text-align:center;font-style:italic;}
+  .bad{color:var(--bad);font-weight:bold;}
+  .ok{color:var(--ok);}
+  .warn{color:var(--warn);}
+  .dim{color:var(--dim);}
+  .full{color:var(--bad);}
+  .bar{height:6px;background:#21262d;border-radius:3px;min-width:60px;overflow:hidden;}
+  .bar>i{display:block;height:100%;background:linear-gradient(90deg,#1f6feb,#58a6ff);}
+  .bar.hot>i{background:linear-gradient(90deg,#f85149,#d29922);}
+
+  /* ---------- 事件流 ---------- */
+  #events .body{max-height:260px;}
+  #events td{white-space:normal;word-break:break-all;}
+  .ev-block{color:var(--bad);}
+  .ev-ok{color:var(--ok);}
+  .ev-warn{color:var(--warn);}
+
+  /* ---------- 流量统计图表 ---------- */
+  .chart-box{padding:10px 12px;}
+  #trafficChart{width:100%;height:170px;display:block;}
+  .legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:8px;font-size:11px;color:var(--dim);}
+  .legend .li{display:flex;align-items:center;gap:5px;}
+  .legend .sw{width:10px;height:10px;border-radius:2px;display:inline-block;}
+  .tbadge{
+    display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;
+    border:1px solid var(--line);
+  }
+  .tb-syn{color:var(--bad);border-color:var(--bad);}
+  .tb-udp{color:var(--warn);border-color:var(--warn);}
+  .tb-http{color:var(--acc);border-color:var(--acc);}
+  .tb-brute{color:#a371f7;border-color:#a371f7;}
+  .tb-scan{color:#39c5cf;border-color:#39c5cf;}
+  footer{margin-top:18px;color:var(--dim);font-size:11px;text-align:center;}
+  #err{
+    display:none;margin-top:14px;padding:8px 12px;border:1px solid var(--bad);border-radius:6px;
+    color:var(--bad);background:#2b1113;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ================= 1. 标题栏 ================= -->
+  <header>
+    <h1>DDoS 流量监控 · 自动过滤审计</h1>
+    <span class="sub">靶机 192.168.1.137</span>
+    <span class="spacer"></span>
+    <span id="clock">--:--:--</span>
+    <span id="autoState" class="pill off">自动屏蔽：加载中</span>
+    <button id="btnAuto">切换</button>
+    <span class="pill" id="connState">连接中</span>
+  </header>
+
+  <div id="err"></div>
+
+  <!-- ================= 2. 三列表：来源速率 ================= -->
+  <div class="grid g3">
+    <div class="card">
+      <h2>TCP SYN 来源 <span class="tag">dest 80/tcp</span></h2>
+      <div class="body">
+        <table><thead><tr><th>来源 IP</th><th class="num">速率/pps</th><th class="num">强度</th><th>状态</th></tr></thead>
+        <tbody id="t-l4"></tbody></table>
+      </div>
+    </div>
+    <div class="card">
+      <h2>UDP 来源 <span class="tag">dest 53/udp</span></h2>
+      <div class="body">
+        <table><thead><tr><th>来源 IP</th><th class="num">速率/pps</th><th class="num">强度</th><th>状态</th></tr></thead>
+        <tbody id="t-udp"></tbody></table>
+      </div>
+    </div>
+    <div class="card">
+      <h2>HTTP 来源 <span class="tag">req/s</span></h2>
+      <div class="body">
+        <table><thead><tr><th>来源 IP</th><th class="num">速率/rps</th><th class="num">强度</th><th>状态</th></tr></thead>
+        <tbody id="t-http"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 3. 三列表：端口 / 扫描 / 爆破 ================= -->
+  <div class="grid g3">
+    <div class="card">
+      <h2>端口分布 <span class="tag">全端口 pps</span></h2>
+      <div class="body">
+        <table><thead><tr><th>端口</th><th class="num">速率/pps</th><th class="num">强度</th></tr></thead>
+        <tbody id="t-ports"></tbody></table>
+      </div>
+    </div>
+    <div class="card">
+      <h2>扫描 / 多端口来源 <span class="tag">5s 内不同端口数</span></h2>
+      <div class="body">
+        <table><thead><tr><th>来源 IP</th><th class="num">端口数</th><th>状态</th></tr></thead>
+        <tbody id="t-scans"></tbody></table>
+      </div>
+    </div>
+    <div class="card">
+      <h2>SSH 爆破失败 <span class="tag">60s 窗口</span></h2>
+      <div class="body">
+        <table><thead><tr><th>来源 IP</th><th class="num">失败次数</th><th>状态</th></tr></thead>
+        <tbody id="t-brute"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 3.5 流量统计与分类 ================= -->
+  <div class="grid">
+    <div class="card">
+      <h2>流量统计与分类 <span class="tag">近 120 秒每秒趋势 · 累计自 agent 启动</span></h2>
+      <div class="chart-box">
+        <canvas id="trafficChart" width="1440" height="170"></canvas>
+        <div class="legend" id="trafficLegend"></div>
+      </div>
+      <div class="body" style="max-height:none">
+        <table>
+          <thead><tr>
+            <th>流量类别</th><th class="num">当前速率</th><th class="num">累计计数</th>
+            <th style="width:220px">占比</th><th class="num">近60s</th>
+          </tr></thead>
+          <tbody id="t-traffic"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <h2>来源分类 <span class="tag">窗口内主导攻击类型判定</span></h2>
+      <div class="body">
+        <table><thead><tr>
+          <th>来源 IP</th><th>分类</th><th class="num">SYN</th><th class="num">UDP</th>
+          <th class="num">HTTP</th><th class="num">爆破</th><th class="num">扫描端口</th>
+          <th class="num">速率</th><th>状态</th>
+        </tr></thead>
+        <tbody id="t-classify"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 4. 被屏蔽 IP ================= -->
+  <div class="grid">
+    <div class="card">
+      <h2>被屏蔽 IP <span class="tag" id="blockCount">0 条</span></h2>
+      <div class="body">
+        <table><thead><tr>
+          <th>IP</th><th>原因</th><th>全端口</th><th class="num">剩余(秒)</th><th>操作</th>
+        </tr></thead>
+        <tbody id="t-blocked"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 5. 最近事件 ================= -->
+  <div class="grid">
+    <div class="card" id="events">
+      <h2>最近事件 <span class="tag">最新在上 · 最多 60 条</span></h2>
+      <div class="body">
+        <table><thead><tr><th style="width:90px">时间</th><th>事件</th></tr></thead>
+        <tbody id="t-events"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <footer>隔离内网演示环境 · 每 2 秒自动刷新 · 规避 SSH 22 端口（全端口封禁除外）</footer>
+</div>
+
+<script>
+/* ============================================================================
+   面板前端逻辑：仅依赖 /api/stats、/api/unblock、/api/auto 三个接口
+   ============================================================================ */
+(function () {
+  "use strict";
+
+  var POLL_MS = 2000;          // 轮询周期
+  var MAX_ROWS = 30;           // 每张表最多展示行数
+  var MAX_REF = 100;           // 强度条参考值（取各表最大速率的较大者，避免永远满格）
+  var timer = null;
+  var lastAuto = null;
+
+  /* ---------- 工具函数 ---------- */
+  function $(id) { return document.getElementById(id); }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function fmtRate(v) {
+    if (v == null || isNaN(v)) return "0";
+    v = Number(v);
+    return v >= 100 ? v.toFixed(0) : (v >= 10 ? v.toFixed(1) : v.toFixed(1));
+  }
+
+  function bar(value, max) {
+    var pct = Math.max(2, Math.min(100, max > 0 ? value / max * 100 : 0));
+    var hot = max > 0 && value / max > 0.66;
+    return '<div class="bar' + (hot ? " hot" : "") + '"><i style="width:' + pct.toFixed(1) + '%"></i></div>';
+  }
+
+  function stateCell(blocked) {
+    return blocked ? '<span class="bad">● 已封禁</span>' : '<span class="ok">正常</span>';
+  }
+
+  function emptyRow(cols, text) {
+    text = text || "暂无数据";
+    return '<tr class="empty"><td colspan="' + cols + '">' + esc(text) + "</td></tr>";
+  }
+
+  /* ---------- 流量统计图表 ---------- */
+  var SERIES = [
+    { key: "syn",   name: "TCP SYN",   color: "#f85149" },
+    { key: "udp",   name: "UDP",       color: "#d29922" },
+    { key: "http",  name: "HTTP",      color: "#58a6ff" },
+    { key: "brute", name: "SSH 爆破",  color: "#a371f7" },
+    { key: "other", name: "其他",      color: "#8b949e" }
+  ];
+
+  function drawChart(hist) {
+    var cv = $("trafficChart");
+    if (!cv || !cv.getContext) return;
+    // 分辨率随容器宽度走，避免固定画布被 CSS 拉伸变形
+    var cssW = cv.clientWidth || 900, cssH = 170;
+    if (cv.width !== cssW) cv.width = cssW;
+    if (cv.height !== cssH) cv.height = cssH;
+    var ctx = cv.getContext("2d");
+    var W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.font = "11px monospace";
+    if (!hist || !hist.length) {
+      ctx.fillStyle = "#8b949e";
+      ctx.fillText("等待流量数据…", 12, H / 2);
+      return;
+    }
+    // Y 轴量程：各序列最大值的 1.15 倍，至少 10
+    var peak = 10;
+    for (var i = 0; i < hist.length; i++) {
+      for (var s = 0; s < SERIES.length; s++) {
+        var v = hist[i][SERIES[s].key] || 0;
+        if (v > peak) peak = v;
+      }
+    }
+    peak *= 1.15;
+    // 网格 + Y 刻度
+    ctx.strokeStyle = "#30363d";
+    ctx.fillStyle = "#8b949e";
+    for (var g = 0; g <= 4; g++) {
+      var gy = 8 + (H - 28) * g / 4;
+      ctx.beginPath(); ctx.moveTo(36, gy); ctx.lineTo(W - 8, gy); ctx.stroke();
+      ctx.fillText(String(Math.round(peak * (4 - g) / 4)), 4, gy + 4);
+    }
+    // 折线（横轴按真实时间戳定位，静默间隙不被压缩）
+    var n = hist.length;
+    var t0 = hist[0].t, t1 = hist[n - 1].t;
+    var tspan = Math.max(1, t1 - t0);
+    function xOf(i) {
+      return 36 + (W - 44) * ((hist[i].t - t0) / tspan);
+    }
+    for (var s = 0; s < SERIES.length; s++) {
+      var key = SERIES[s].key;
+      ctx.strokeStyle = SERIES[s].color;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      for (var i = 0; i < n; i++) {
+        var x = xOf(i);
+        var y = 8 + (H - 28) * (1 - (hist[i][key] || 0) / peak);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    // X 轴时间标签（首/中/尾）
+    ctx.fillStyle = "#8b949e";
+    function lbl(i, align) {
+      ctx.textAlign = align;
+      var b = hist[i];
+      var d = new Date(b.t * 1000);
+      var hh = ("0" + d.getHours()).slice(-2), mm = ("0" + d.getMinutes()).slice(-2),
+          ss = ("0" + d.getSeconds()).slice(-2);
+      ctx.fillText(hh + ":" + mm + ":" + ss, xOf(i), H - 6);
+      ctx.textAlign = "left";
+    }
+    lbl(0, "left"); lbl(n - 1, "right");
+    if (n > 2) lbl(Math.floor(n / 2), "center");
+    // 图例
+    var lg = [];
+    for (var s = 0; s < SERIES.length; s++) {
+      lg.push('<span class="li"><span class="sw" style="background:' + SERIES[s].color +
+        '"></span>' + esc(SERIES[s].name) + "</span>");
+    }
+    $("trafficLegend").innerHTML = lg.join("");
+  }
+
+  function renderRows(tbodyId, rows, cols, renderFn, emptyText) {
+    var tb = $(tbodyId);
+    if (!rows || !rows.length) { tb.innerHTML = emptyRow(cols, emptyText); return; }
+    var html = [];
+    for (var i = 0; i < rows.length && i < MAX_ROWS; i++) html.push(renderFn(rows[i]));
+    tb.innerHTML = html.join("");
+  }
+
+  /* ---------- 数据获取 ---------- */
+  function fetchJSON(url, opts) {
+    var o = opts || {};
+    o.cache = "no-store";
+    return fetch(url, o).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    });
+  }
+
+  function poll() {
+    fetchJSON("/api/stats").then(function (d) {
+      hideError();
+      $("connState").className = "pill on";
+      $("connState").textContent = "在线";
+      render(d);
+    }).catch(function (e) {
+      $("connState").className = "pill off";
+      $("connState").textContent = "断开";
+      showError("无法连接 agent（" + e.message + "），请确认 agent.py 正在运行且白名单包含本机 IP。");
+    });
+  }
+
+  function render(d) {
+    /* --- 标题栏 --- */
+    $("clock").textContent = d.ts || "--:--:--";
+    var st = $("autoState");
+    if (d.auto) {
+      st.className = "pill on";
+      st.textContent = "自动屏蔽：开启";
+      $("btnAuto").textContent = "关闭自动屏蔽";
+    } else {
+      st.className = "pill off";
+      st.textContent = "自动屏蔽：关闭";
+      $("btnAuto").textContent = "开启自动屏蔽";
+    }
+    lastAuto = !!d.auto;
+
+    /* --- 速率参考值 --- */
+    var peak = 0;
+    ["l4", "udp", "http", "ports"].forEach(function (k) {
+      (d[k] || []).forEach(function (r) { if (r.rate > peak) peak = r.rate; });
+    });
+    var ref = Math.max(peak, 100);
+
+    /* --- 2. 三列表 --- */
+    renderRows("t-l4", d.l4, 4, function (r) {
+      return "<tr><td>" + esc(r.ip) + "</td><td class='num'>" + fmtRate(r.rate) +
+        "</td><td>" + bar(r.rate, ref) + "</td><td>" + stateCell(r.blocked) + "</td></tr>";
+    }, "暂无 TCP SYN 流量");
+    renderRows("t-udp", d.udp, 4, function (r) {
+      return "<tr><td>" + esc(r.ip) + "</td><td class='num'>" + fmtRate(r.rate) +
+        "</td><td>" + bar(r.rate, ref) + "</td><td>" + stateCell(r.blocked) + "</td></tr>";
+    }, "暂无 UDP 流量");
+    renderRows("t-http", d.http, 4, function (r) {
+      return "<tr><td>" + esc(r.ip) + "</td><td class='num'>" + fmtRate(r.rate) +
+        "</td><td>" + bar(r.rate, ref) + "</td><td>" + stateCell(r.blocked) + "</td></tr>";
+    }, "暂无 HTTP 请求");
+
+    /* --- 3. 端口 / 扫描 / 爆破 --- */
+    var pref = 0;
+    (d.ports || []).forEach(function (r) { if (r.rate > pref) pref = r.rate; });
+    pref = Math.max(pref, 10);
+    renderRows("t-ports", d.ports, 3, function (r) {
+      return "<tr><td>" + esc(r.port) + "</td><td class='num'>" + fmtRate(r.rate) +
+        "</td><td>" + bar(r.rate, pref) + "</td></tr>";
+    }, "暂无端口流量");
+    renderRows("t-scans", d.scans, 3, function (r) {
+      return "<tr><td>" + esc(r.ip) + "</td><td class='num'>" + esc(r.ports) +
+        "</td><td>" + stateCell(r.blocked) + "</td></tr>";
+    }, "未发现扫描行为");
+    renderRows("t-brute", d.brute, 3, function (r) {
+      var cls = r.fails >= 5 ? "bad" : (r.fails > 0 ? "warn" : "");
+      return "<tr><td>" + esc(r.ip) + "</td><td class='num " + cls + "'>" + esc(r.fails) +
+        "</td><td>" + stateCell(r.blocked) + "</td></tr>";
+    }, "无 SSH 失败记录");
+
+    /* --- 3.5 流量统计与分类 --- */
+    var tr = d.traffic || {};
+    var totals = tr.totals || {};
+    var rates = tr.rates || {};
+    drawChart(tr.hist || []);
+    // 近 60s 各类计数（按真实时间截取，容忍静默间隙）
+    var h60 = {};
+    SERIES.forEach(function (s) { h60[s.key] = 0; });
+    var hh = tr.hist || [];
+    var cut = hh.length ? (hh[hh.length - 1].t - 59) : 0;
+    hh.forEach(function (b) {
+      if (b.t >= cut) SERIES.forEach(function (s) { h60[s.key] += (b[s.key] || 0); });
+    });
+    var grand = 0;
+    SERIES.forEach(function (s) { grand += (totals[s.key] || 0); });
+    grand = grand || 1;
+    renderRows("t-traffic", SERIES, 5, function (s) {
+      var total = totals[s.key] || 0;
+      var pct = total / grand * 100;
+      var rate = (s.key in rates) ? rates[s.key] : (h60[s.key] / 60);
+      return "<tr>" +
+        "<td><span class='tbadge tb-" + s.key + "'>" + esc(s.name) + "</span></td>" +
+        "<td class='num'>" + fmtRate(rate) + "/s</td>" +
+        "<td class='num'>" + total + "</td>" +
+        "<td>" + bar(total, grand) + " <span class='dim'>" + pct.toFixed(1) + "%</span></td>" +
+        "<td class='num'>" + h60[s.key] + "</td>" +
+        "</tr>";
+    }, "暂无流量数据");
+    renderRows("t-classify", d.classify, 9, function (r) {
+      var tmap = { SYN: "syn", UDP: "udp", HTTP: "http", 爆破: "brute", 扫描: "scan", 其他: "" };
+      var tb = tmap[r.type]
+        ? "<span class='tbadge tb-" + tmap[r.type] + "'>" + esc(r.type) + "</span>"
+        : esc(r.type);
+      return "<tr>" +
+        "<td>" + esc(r.ip) + "</td><td>" + tb + "</td>" +
+        "<td class='num'>" + esc(r.syn) + "</td><td class='num'>" + esc(r.udp) + "</td>" +
+        "<td class='num'>" + esc(r.http) + "</td><td class='num'>" + esc(r.brute) + "</td>" +
+        "<td class='num'>" + esc(r.ports) + "</td>" +
+        "<td class='num'>" + fmtRate(r.rate) + "</td>" +
+        "<td>" + stateCell(r.blocked) + "</td>" +
+        "</tr>";
+    }, "暂无活跃来源");
+
+    /* --- 4. 被屏蔽 IP --- */
+    var bl = d.blocked || [];
+    $("blockCount").textContent = bl.length + " 条";
+    renderRows("t-blocked", bl, 5, function (r) {
+      return "<tr>" +
+        "<td class='bad'>" + esc(r.ip) + "</td>" +
+        "<td>" + esc(r.reason) + "</td>" +
+        "<td>" + (r.full ? "<span class='full'>全端口</span>" : "<span class='dim'>80/53</span>") + "</td>" +
+        "<td class='num'>" + esc(r.ttl) + "</td>" +
+        "<td><button class='small' data-ip='" + esc(r.ip) + "'>解封</button></td>" +
+        "</tr>";
+    }, "当前没有被屏蔽的 IP");
+
+    /* --- 5. 事件 --- */
+    renderRows("t-events", d.events, 2, function (r) {
+      var cls = r.level === "block" ? "ev-block" : (r.level === "ok" ? "ev-ok" : (r.level === "warn" ? "ev-warn" : ""));
+      return "<tr><td class='dim'>" + esc(r.ts) + "</td><td class='" + cls + "'>" + esc(r.msg) + "</td></tr>";
+    }, "暂无事件");
+  }
+
+  /* ---------- 交互 ---------- */
+  function doUnblock(ip) {
+    if (!ip) return;
+    if (!confirm("确认解封 " + ip + " ？解除后该来源可立即恢复访问。")) return;
+    fetchJSON("/api/unblock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ip: ip })
+    }).then(function (r) {
+      if (!r.ok) alert("解封失败：" + (r.msg || "未知错误"));
+      poll();
+    }).catch(function (e) { alert("请求失败：" + e.message); });
+  }
+
+  function toggleAuto() {
+    var target = !lastAuto;
+    fetchJSON("/api/auto", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: target })
+    }).then(function () { poll(); })
+      .catch(function (e) { alert("切换失败：" + e.message); });
+  }
+
+  function showError(msg) { var e = $("err"); e.textContent = msg; e.style.display = "block"; }
+  function hideError() { $("err").style.display = "none"; }
+
+  /* ---------- 事件绑定 ---------- */
+  document.addEventListener("click", function (ev) {
+    var t = ev.target;
+    if (t && t.tagName === "BUTTON" && t.hasAttribute("data-ip")) {
+      doUnblock(t.getAttribute("data-ip"));
+    }
+  });
+  $("btnAuto").addEventListener("click", toggleAuto);
+
+  /* ---------- 启动 ---------- */
+  poll();
+  timer = setInterval(poll, POLL_MS);
+  // 标签页切回前台时立即刷新一次
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) poll();
+  });
+})();
+</script>
+</body>
+</html>
