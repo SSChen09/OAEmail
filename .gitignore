@@ -11,10 +11,10 @@ ddos/_testlog
 ddos/_selftest.py
 
 # __pycache__
-#ddos/attacker/__pycache__
-#ddos/__pycache__
-#ddos/common/__pycache__
-#ddos/target/__pycache__
-#tools/__pycache__
+ddos/attacker/__pycache__
+ddos/__pycache__
+ddos/common/__pycache__
+ddos/target/__pycache__
+tools/__pycache__
 
 比赛
