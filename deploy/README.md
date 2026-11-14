@@ -21,16 +21,19 @@
 - OA 应用源码在仓库 `oa/` 目录，`tools/push_deploy.py` 会一并上传到各机 `/opt/deploy/oa/`，
   由 `4_oa_mail_setup.sh` 部署到 `/var/www/oa` 并启用 nginx 站点（server_name: ddzt.old 等）。
 - **邮件模块为完整后端**（webmail：php-imap 读 Dovecot IMAP + SMTP 发 Postfix；
-  账号 eva@ddzt.old、kk@ddzt.old、admin@ddzt.old，口令与 OA 相同）；**公告通知 / 日程安排为服务端 JSON 存储**；
-  其余模块（工作台待办/审批/人事/通讯录等）为前端演示页面，无业务后端。
+  账号 eva@ddzt.old、kk@ddzt.old、admin@ddzt.old，口令与 OA 相同）；**公告通知 / 日程安排为服务端 JSON 存储**，
+  **个人待办为服务端 SQLite 存储（每人独立）**；其余模块（审批/人事/通讯录等）为前端演示页面，无业务后端。
 - **OA 门户登录**：`oa/api/auth.php` 服务端会话认证（`login` / `me` / `logout`，
   bcrypt 存密码，账号表 `oa/api/users.php`），登录账号即邮箱：eva@ddzt.old/rei、kk@ddzt.old/zmjjkk、admin@ddzt.old/admin；密码错误/未登录返回 401。
   登录成功后用同一口令建立邮箱会话，进入「邮件」免二次登录。
-- **修改权限**：仅 admin@ddzt.old 可修改/保存 OA 内容（公告与日程的新增/编辑/删除、审批、待办勾选、文档上传/删除）；eva/kk 为只读账号。
-  `auth.php` 的 `me`/`login` 返回 `role`；`files.php` 与 `content.php` 写接口二次校验（未登录 401、非管理员 403）。
+- **修改权限**：admin@ddzt.old 可维护公告、日程并审批；**个人待办每个账号独立**，所有登录用户可增删改自己的待办，管理员也不能改他人。
+  **文件共享另行放开**：任何登录用户可上传（≤20MB），上传者本人或 admin 可删除，所有登录用户可查看列表/下载。
+  `auth.php` 的 `me`/`login` 返回 `role`；`content.php` 写接口校验角色（未登录 401、非管理员 403），`files.php` 校验登录态与文件归属，`todos.php` 只读写本人待办。
 - **公告/日程存储**：`/var/www/oa-data/content.json`（`apache:apache`，目录 775）；首次部署从
   `oa/api/content_defaults.json` 初始化，重跑部署保留现有内容；API `/api/content.php`
   （`data` / `notice_save` / `notice_delete` / `schedule_save` / `schedule_delete`）。
+- **个人待办存储**：`/var/www/oa-data/todos.sqlite`（`apache:apache`）；首次访问为每个账号写入 8 条默认待办，
+  之后各账号独立；API `/api/todos.php`（`list` / `save` / `delete`，只读写本人数据）。
 - 邮件系统配置：postfix `mydestination` 含 ddzt.old、`home_mailbox = Maildir/`、
   `inet_interfaces = all`、`message_size_limit = 35840000`（约 34MB，容纳 20MB 附件的 base64 膨胀）；
   dovecot `mail_location = maildir:~/Maildir`、`disable_plaintext_auth = no`、`ssl = no`
@@ -54,8 +57,8 @@
   **不动** sshd / redis / vsftpd / ddos-agent（DDoS 防护端独立管理）。
 - 自检是真实链路（不是只看进程）：服务状态、端口 80/9000/3306/25/110/143、
   OA 首页 HTTP 200、OA 登录接口（未登录 401）、OA 登录返回管理员角色、OA 登录后邮箱自动关联、webmail API、
-  文件共享 API、文档上传未登录 401（仅管理员可写）、公告/日程接口（未登录 401、登录可读、普通账号写入 403）、
-  IMAP 登录（eva/admin）、SMTP 本机提交。
+  文件共享 API 未登录 401、文件上传未登录 401、公告/日程接口（未登录 401、登录可读、普通账号写入 403）、
+  个人待办接口（未登录 401、登录可读）、IMAP 登录（eva/admin）、SMTP 本机提交。
 - `stop` 后自检期望全部离线（服务停止、端口释放）；汇总 PASS/FAIL/WARN，
   FAIL 时退出码非 0；幂等可反复执行。
 - 用法（服务端 152 上执行，当前文件位置 `/root/test/5_oa_mail_ctl.sh`）：
@@ -65,6 +68,22 @@
   bash /root/test/5_oa_mail_ctl.sh restart   # 先停后启 + 自检
   bash /root/test/5_oa_mail_ctl.sh status    # 只读体检（check 同义）
   ```
+
+## 上传文件盘点（6_oa_upload_inventory.sh，仅服务端）
+
+- 列出服务端全部上传文件的路径与大小：文件共享实体（`/var/www/oa-share/files`，附 ID/原始文件名/上传者）
+  与邮件附件（各用户 `Maildir` 内的 MIME 附件，按解码后大小统计，位置显示为“邮件文件#part=N”）。
+- 表格中的 `ID` 为文件共享数据库 id，可直接用于接口删除（需管理员或上传者登录 cookie）：
+  `curl -b cookie.txt -d 'action=delete&id=12' http://127.0.0.1/api/files.php`；邮件附件 ID 显示 `-`。
+- 安装：把脚本放到 `/usr/local/bin/oa-upload-inventory` 并 `chmod 755`。
+- 用法：
+  ```bash
+  oa-upload-inventory                 # 表格 + 分类合计
+  oa-upload-inventory --json          # JSON（rows/totals，便于巡检脚本消费）
+  oa-upload-inventory --no-mail       # 只看文件共享
+  oa-upload-inventory --no-share      # 只看邮件附件
+  ```
+- 只读脚本，不改动任何文件；需要 root 读取各用户 Maildir。
 
 ## 用法
 
@@ -109,5 +128,5 @@ firewalld、SELinux 设为 permissive**（可 `NO_FIREWALL_CHANGE=1` 跳过，�
 
 - 1/2/3 号脚本只装**系统依赖并校验**；OA / 邮件业务部署在 `4_oa_mail_setup.sh`，
   DDoS 业务部署在 ddos 项目自带脚本。
-- OA 系统的邮件、文档中心、公告通知、日程安排为真实后端；其余模块为前端演示（数据写死在 `app.js`）。
+- OA 系统的邮件、文件共享、公告通知、日程安排为真实后端；其余模块为前端演示（数据写死在 `app.js`）。
 - DDoS 攻击组件仅限隔离内网演练，目标只允许 `192.168.3.152`（见 ddos.md 硬性约束）。

@@ -2,12 +2,12 @@
 
 /* ============================================================
    ddzt.old 协同办公 OA —— 演示展示版前端逻辑
-   邮件模块对接 api/mail.php；公告/日程对接 api/content.php；其余模块为演示数据
+   邮件模块对接 api/mail.php；公告/日程对接 api/content.php；个人待办对接 api/todos.php；其余模块为演示数据
    ============================================================ */
 
 /* ===================== 演示数据（集中定义，方便替换） ===================== */
 
-const DEMO_STATS = { todos: 8, notices: 5, attendance: 22 };
+const DEMO_STATS = { notices: 5, attendance: 22 };
 
 const APPROVALS = [
   { id: 1, applicant: '张伟', type: '请假', time: '2026-11-12 09:15', status: '待审批' },
@@ -31,17 +31,6 @@ const EMPLOYEES = [
   { no: 'DD1008', name: '陈静', dept: '行政部', title: '前台文员', phone: '138****1008', email: 'chenjing@ddzt.old', hire: '2026-02-24' }
 ];
 
-const DOCS = [
-  { name: '2026 年度行政管理制度汇编.docx', type: 'doc', size: '2.4 MB', time: '2026-11-11 16:20' },
-  { name: '11 月员工考勤汇总表.xlsx', type: 'xls', size: '386 KB', time: '2026-11-11 09:42' },
-  { name: '年度工作总结大会汇报模板.pptx', type: 'ppt', size: '5.1 MB', time: '2026-11-10 14:05' },
-  { name: '内网信息安全保密手册.pdf', type: 'pdf', size: '3.8 MB', time: '2026-11-08 11:30' },
-  { name: '办公用品采购申请单模板.docx', type: 'doc', size: '124 KB', time: '2026-11-06 15:12' },
-  { name: '新员工入职指引手册.pdf', type: 'pdf', size: '1.9 MB', time: '2026-11-04 10:26' },
-  { name: '部门周报模板（2026 版）.xlsx', type: 'xls', size: '98 KB', time: '2026-10-30 17:48' },
-  { name: '历年规章制度归档备份.zip', type: 'zip', size: '28.6 MB', time: '2026-10-27 09:03' }
-];
-
 const CONTACTS = [
   { name: 'eva', dept: '行政部', title: '行政专员', phone: '138****1001', email: 'eva@ddzt.old' },
   { name: 'kk', dept: '技术部', title: '运维工程师', phone: '138****1002', email: 'kk@ddzt.old' },
@@ -58,23 +47,14 @@ const QUICK_LINKS = [
   { route: '#/approvals', icon: '✅', label: '流程审批' },
   { route: '#/hr', icon: '👥', label: '人事管理' },
   { route: '#/schedule', icon: '📅', label: '日程安排' },
-  { route: '#/docs', icon: '📁', label: '文档中心' },
+  { route: '#/share', icon: '📤', label: '文件共享' },
   { route: '#/contacts', icon: '📇', label: '通讯录' },
   { route: '#/mail', icon: '✉️', label: '邮件' },
   { route: '#/settings', icon: '⚙️', label: '系统设置' },
   { route: '#/mail', icon: '✍️', label: '写邮件' }
 ];
 
-const TODOS = [
-  { id: 1, text: '提交 11 月部门考勤汇总表', date: '11-13 截止', done: false },
-  { id: 2, text: '审核办公用品采购申请（3 笔）', date: '11-12 截止', done: false },
-  { id: 3, text: '准备年度工作总结大会部门汇报材料', date: '11-17 截止', done: false },
-  { id: 4, text: '回复技术部服务器机房巡检结果', date: '11-12 截止', done: false },
-  { id: 5, text: '整理新员工入职档案（陈静）', date: '11-14 截止', done: false },
-  { id: 6, text: '更新内网通讯录分机号', date: '11-16 截止', done: true },
-  { id: 7, text: '确认生日会场地布置方案', date: '11-13 截止', done: false },
-  { id: 8, text: '归档 10 月用章审批记录', date: '11-15 截止', done: false }
-];
+let TODOS = [];
 
 const AVATAR_COLORS = ['#4f6ef7', '#7c5cf0', '#0ea5e9', '#16a34a', '#f59e0b', '#e5484d', '#06b6d4', '#8b5cf6'];
 
@@ -149,14 +129,16 @@ async function enterApp(user, role) {
   OA.user = user;
   OA.role = role === 'admin' ? 'admin' : 'user';
   $('#current-user').textContent = user;
+  const avatar = document.querySelector('.user-avatar');
+  if (avatar) avatar.textContent = (user || 'U').charAt(0).toUpperCase();
   const tag = $('#role-tag');
   if (tag) {
-    tag.textContent = isAdmin() ? '管理员' : '只读用户';
+    tag.textContent = isAdmin() ? '管理员' : '普通用户';
     tag.className = 'role-tag ' + (isAdmin() ? 'role-admin' : 'role-user');
   }
   $('#login-page').classList.add('hidden');
   $('#app').classList.remove('hidden');
-  await loadContent(true);
+  await Promise.all([loadContent(true), loadTodos(true)]);
   if (!location.hash) location.hash = '#/dashboard';
   navigate();
 }
@@ -167,6 +149,7 @@ function exitApp() {
   CONTENT.notices = [];
   CONTENT.schedule = [];
   CONTENT.loaded = false;
+  TODOS = [];
   sessionStorage.removeItem('oa_user');
   $('#app').classList.add('hidden');
   $('#login-page').classList.remove('hidden');
@@ -259,6 +242,111 @@ function todayStr() {
   return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
 }
 
+
+/* ===================== 个人待办（服务端持久化，每个账号独立） ===================== */
+
+async function todoRequest(action, fields) {
+  const options = { credentials: 'same-origin' };
+  let url = 'api/todos.php';
+  if (action === 'list') {
+    url += '?action=list';
+    options.method = 'GET';
+  } else {
+    const body = new URLSearchParams();
+    body.set('action', action);
+    Object.keys(fields || {}).forEach(function (key) { body.set(key, fields[key]); });
+    options.method = 'POST';
+    options.headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+    options.body = body.toString();
+  }
+  try {
+    const res = await fetch(url, options);
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (parseErr) {
+      return { ok: false, error: '待办服务返回了异常内容' };
+    }
+    if (!res.ok) data.ok = false;
+    return data;
+  } catch (netErr) {
+    return { ok: false, error: '无法连接待办服务，请稍后重试' };
+  }
+}
+
+async function loadTodos(force) {
+  if (TODOS.length && !force) return true;
+  const res = await todoRequest('list');
+  if (!res || res.ok !== true) {
+    toast((res && res.error) ? res.error : '加载待办失败', 'error');
+    return false;
+  }
+  TODOS = Array.isArray(res.data.todos) ? res.data.todos : [];
+  return true;
+}
+
+async function todoMutate(action, fields) {
+  const res = await todoRequest(action, fields);
+  if (!res || res.ok !== true) {
+    toast((res && res.error) ? res.error : '保存失败，请稍后重试', 'error');
+    return false;
+  }
+  TODOS = Array.isArray(res.data.todos) ? res.data.todos : TODOS;
+  toast(res.data.message || '已保存', 'success');
+  if (location.hash === '' || location.hash === '#/dashboard') renderDashboard();
+  return true;
+}
+
+function todoRowHtml(t) {
+  const due = t.due ? String(t.due) : '';
+  const overdue = due && !t.done && due < todayStr();
+  return '<div class="todo-item' + (t.done ? ' done' : '') + '" data-todo="' + t.id + '">' +
+    '<input type="checkbox" data-todo-check' + (t.done ? ' checked' : '') + ' aria-label="标记待办完成">' +
+    '<span class="todo-text">' + esc(t.text) + '</span>' +
+    (due ? '<span class="todo-date' + (overdue ? ' todo-overdue' : '') + '">' + esc(due.slice(5)) + ' 截止</span>' : '') +
+    '<span class="todo-actions">' +
+      '<button type="button" class="todo-act" data-todo-edit title="编辑待办" aria-label="编辑待办">✏️</button>' +
+      '<button type="button" class="todo-act todo-act-danger" data-todo-del title="删除待办" aria-label="删除待办">🗑️</button>' +
+    '</span></div>';
+}
+
+function openTodoEditor(todo) {
+  const t = todo || { id: 0, text: '', done: false, due: '' };
+  openModal(todo ? '编辑待办' : '添加待办',
+    '<form id="todo-form" autocomplete="off">' +
+      '<div class="form-field"><label for="tf-text">待办内容</label>' +
+        '<input id="tf-text" type="text" maxlength="200" value="' + esc(t.text) + '" placeholder="例如：提交本周工作周报">' +
+      '</div>' +
+      '<div class="form-field"><label for="tf-due">截止日期（可空）</label>' +
+        '<input id="tf-due" type="date" value="' + esc(t.due || '') + '">' +
+      '</div>' +
+      '<label class="check-line"><input type="checkbox" id="tf-done"' + (t.done ? ' checked' : '') + '> 已完成</label>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="btn btn-ghost" id="todo-cancel">取消</button>' +
+        '<button type="submit" class="btn btn-primary">保存</button>' +
+      '</div>' +
+    '</form>');
+  $('#todo-cancel').addEventListener('click', closeModal);
+  $('#todo-form').addEventListener('submit', async function (ev) {
+    ev.preventDefault();
+    const text = $('#tf-text').value.trim();
+    if (!text) { toast('请填写待办内容', 'error'); return; }
+    const btn = ev.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = '保存中…';
+    const ok = await todoMutate('save', {
+      id: t.id || 0,
+      text: text,
+      done: $('#tf-done').checked ? 1 : 0,
+      due: $('#tf-due').value || ''
+    });
+    btn.disabled = false;
+    btn.textContent = '保存';
+    if (ok) closeModal();
+  });
+}
+
 /* ===================== 邮件 API 封装（真实功能） ===================== */
 
 const MAIL = {
@@ -345,11 +433,12 @@ async function refreshMailList(silent, folder) {
 /* ===================== 工作台 ===================== */
 
 function renderDashboard() {
+  const openTodos = TODOS.filter(function (t) { return !t.done; }).length;
   $('#content').innerHTML =
     '<div class="stat-grid">' +
-      '<div class="stat-card"><div class="stat-icon i-blue">📋</div><div><div class="stat-num">' + DEMO_STATS.todos + '</div><div class="stat-label">待办事项</div></div></div>' +
+      '<div class="stat-card"><div class="stat-icon i-blue">📋</div><div><div class="stat-num">' + openTodos + '</div><div class="stat-label">待办事项</div></div></div>' +
       '<div class="stat-card"><div class="stat-icon i-purple">📢</div><div><div class="stat-num">' + CONTENT.notices.length + '</div><div class="stat-label">公告通知</div></div></div>' +
-      '<div class="stat-card"><div class="stat-icon i-green">🗓️</div><div><div class="stat-num">' + DEMO_STATS.attendance + ' 天</div><div class="stat-label">本月考勤</div></div></div>' +
+      '<div class="stat-card"><div class="stat-icon i-green">📅</div><div><div class="stat-num">' + DEMO_STATS.attendance + ' 天</div><div class="stat-label">本月考勤</div></div></div>' +
       '<div class="stat-card"><div class="stat-icon i-orange">✉️</div><div><div class="stat-num" id="stat-unread">—</div><div class="stat-label">未读邮件</div></div></div>' +
     '</div>' +
     '<div class="card"><div class="card-title">🚀 快捷入口</div><div class="quick-grid">' +
@@ -365,14 +454,11 @@ function renderDashboard() {
         : '<div class="todo-item"><span>📭</span><span class="todo-text">暂无公告</span></div>') +
     '</div>' +
     '<div class="card"><div class="card-title">✅ 我的待办清单' +
-      (isAdmin() ? '' : '<span class="readonly-hint">只读 · 仅管理员可勾选</span>') +
+      '<button type="button" class="btn btn-sm btn-primary todo-add-btn" id="todo-add">＋ 添加待办</button>' +
     '</div><div id="todo-list">' +
-      TODOS.map(function (t) {
-        return '<label class="todo-item' + (t.done ? ' done' : '') + '" data-todo="' + t.id + '">' +
-          '<input type="checkbox"' + (t.done ? ' checked' : '') + (isAdmin() ? '' : ' disabled title="仅管理员可修改"') + '>' +
-          '<span class="todo-text">' + esc(t.text) + '</span>' +
-          '<span class="todo-date">' + esc(t.date) + '</span></label>';
-      }).join('') +
+      (TODOS.length
+        ? TODOS.map(todoRowHtml).join('')
+        : '<div class="todo-empty">还没有待办，点击右上角「添加待办」创建第一条。</div>') +
     '</div></div>';
 
   $('#content').querySelectorAll('[data-notice]').forEach(function (row) {
@@ -380,18 +466,26 @@ function renderDashboard() {
   });
   const more = $('#more-notices');
   if (more) more.addEventListener('click', function () { location.hash = '#/notices'; });
-  $('#content').querySelectorAll('[data-todo]').forEach(function (label) {
-    const box = label.querySelector('input[type="checkbox"]');
-    if (!box) return;
-    box.addEventListener('change', function () {
-      if (!isAdmin()) {
-        box.checked = !box.checked;
-        toast('仅管理员可修改待办状态', 'error');
-        return;
-      }
-      const item = TODOS.filter(function (t) { return String(t.id) === label.dataset.todo; })[0];
-      if (item) item.done = box.checked;
-      label.classList.toggle('done', box.checked);
+  $('#todo-add').addEventListener('click', function () { openTodoEditor(null); });
+
+  $('#content').querySelectorAll('[data-todo]').forEach(function (row) {
+    const item = TODOS.filter(function (t) { return String(t.id) === row.dataset.todo; })[0];
+    if (!item) return;
+    const box = row.querySelector('[data-todo-check]');
+    box.addEventListener('change', async function () {
+      const ok = await todoMutate('save', {
+        id: item.id,
+        text: item.text,
+        done: box.checked ? 1 : 0,
+        due: item.due || ''
+      });
+      if (!ok) renderDashboard();
+    });
+    row.querySelector('[data-todo-edit]').addEventListener('click', function () { openTodoEditor(item); });
+    row.querySelector('[data-todo-del]').addEventListener('click', function () {
+      confirmDelete('待办「' + item.text + '」', async function () {
+        return await todoMutate('delete', { id: item.id });
+      });
     });
   });
 
@@ -735,28 +829,204 @@ function openScheduleEditor(item, presetDay) {
   });
 }
 
-/* ===================== 文档中心 ===================== */
+/* ===================== 文件共享 ===================== */
 
-const DOC_ICONS = { doc: '📄', xls: '📊', ppt: '📽️', pdf: '📕', txt: '📝', zip: '🗜️' };
+const SHARE = { files: [], totalSize: 0, loaded: false };
 
-function renderDocs() {
+const SHARE_ICONS = {
+  doc: '📄', docx: '📄', xls: '📊', xlsx: '📊', csv: '📊',
+  ppt: '📽️', pptx: '📽️', pdf: '📕', txt: '📝', md: '📝',
+  zip: '🗜️', rar: '🗜️', '7z': '🗜️', png: '🖼️', jpg: '🖼️', jpeg: '🖼️'
+};
+
+function shareIcon(type) {
+  return SHARE_ICONS[String(type || '').toLowerCase()] || '📎';
+}
+
+function shareDate(value) {
+  return String(value || '').slice(0, 16);
+}
+
+function shareCanDelete(file) {
+  return isAdmin() || String(file.uploader || '').toLowerCase() === String(OA.user || '').toLowerCase();
+}
+
+function renderShare() {
   $('#content').innerHTML =
-    '<div class="page-head"><h2>文档中心</h2><p>常用制度文件与模板下载（演示数据）</p></div>' +
-    '<div class="card"><div class="table-wrap"><table class="table">' +
-      '<thead><tr><th style="width:44%">文件名</th><th>类型</th><th>大小</th><th>更新时间</th><th>操作</th></tr></thead><tbody>' +
-      DOCS.map(function (d, i) {
-        return '<tr>' +
-          '<td>' + (DOC_ICONS[d.type] || '📄') + ' ' + esc(d.name) + '</td>' +
-          '<td>' + esc(d.type.toUpperCase()) + '</td>' +
-          '<td>' + esc(d.size) + '</td>' +
-          '<td>' + esc(d.time) + '</td>' +
-          '<td class="col-actions"><button class="btn btn-sm btn-primary" data-download="' + i + '">⬇️ 下载</button></td>' +
-        '</tr>';
-      }).join('') +
-      '</tbody></table></div></div>';
+    '<div class="page-head page-head-actions"><div><h2>文件共享</h2>' +
+      '<p>所有登录用户都可上传；可填写说明和到期时间。到期后文件保留但禁止下载，上传者或管理员可删除。</p></div>' +
+      '<button type="button" class="btn btn-primary" id="share-upload">＋ 上传文件</button>' +
+    '</div>' +
+    '<div class="share-summary" id="share-summary">正在加载…</div>' +
+    '<div class="card"><div class="table-wrap"><table class="table share-table">' +
+      '<thead><tr><th style="width:58px">ID</th><th style="width:31%">文件 / 说明</th><th>大小</th><th>上传者</th><th>上传时间</th><th>到期时间</th><th style="width:132px">操作</th></tr></thead>' +
+      '<tbody id="share-body"><tr><td colspan="7" class="empty-cell">正在加载…</td></tr></tbody>' +
+    '</table></div></div>';
 
-  $('#content').querySelectorAll('[data-download]').forEach(function (btn) {
-    btn.addEventListener('click', function () { toast('演示系统，下载功能未开放'); });
+  $('#share-upload').addEventListener('click', openShareUpload);
+  loadShareFiles(SHARE.loaded);
+}
+
+async function loadShareFiles(force) {
+  if (SHARE.loaded && !force) {
+    paintShareTable();
+    return;
+  }
+  try {
+    const res = await fetch('api/files.php', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'action=list'
+    });
+    const data = await res.json().catch(function () { return null; });
+    if (!data) {
+      toast('文件服务返回了异常内容', 'error');
+      paintShareError('加载失败');
+      return;
+    }
+    if (!data.ok) {
+      toast(data.error || '加载文件列表失败', 'error');
+      paintShareError(data.error || '加载失败');
+      return;
+    }
+    SHARE.files = (data.data && data.data.files) || [];
+    SHARE.totalSize = (data.data && data.data.total_size) || 0;
+    SHARE.loaded = true;
+    paintShareTable();
+  } catch (e) {
+    toast('无法连接文件服务', 'error');
+    paintShareError('无法连接文件服务');
+  }
+}
+
+function paintShareError(text) {
+  const body = $('#share-body');
+  if (body) {
+    body.innerHTML = '<tr><td colspan="7" class="empty-cell">' + esc(text) + '</td></tr>';
+  }
+}
+
+function paintShareTable() {
+  const summary = $('#share-summary');
+  if (summary) {
+    summary.textContent = '共 ' + SHARE.files.length + ' 个文件 · 合计 ' + formatSize(SHARE.totalSize);
+  }
+  const body = $('#share-body');
+  if (!body) return;
+  if (!SHARE.files.length) {
+    body.innerHTML = '<tr><td colspan="7" class="empty-cell">还没有共享文件，点击右上角「上传文件」添加第一个</td></tr>';
+    return;
+  }
+  body.innerHTML = SHARE.files.map(function (f) {
+    const expired = !!f.expired;
+    const expireCell = f.expires_at
+      ? (expired
+          ? '<span class="expire-badge">已过期</span><span class="share-expire">' + esc(shareDate(f.expires_at)) + '</span>'
+          : '<span class="share-expire">' + esc(shareDate(f.expires_at)) + '</span>')
+      : '<span class="dim">永久</span>';
+    const actions = '<button type="button" class="btn btn-sm ' + (expired ? 'btn-ghost' : 'btn-primary') + '"' +
+        (expired ? ' disabled title="文件已过期，无法下载"' : ' data-share-download="' + f.id + '"') + '>⬇️<span class="btn-label">下载</span></button>' +
+      (shareCanDelete(f)
+        ? '<button type="button" class="btn btn-sm btn-danger" data-share-delete="' + f.id + '">🗑️<span class="btn-label">删除</span></button>'
+        : '');
+    return '<tr' + (expired ? ' class="share-row-expired"' : '') + '>' +
+      '<td class="share-id" title="文件 ID，可用于接口删除">#' + esc(String(f.id)) + '</td>' +
+      '<td><div class="share-name">' + shareIcon(f.type) + ' <strong>' + esc(f.name) + '</strong></div>' +
+        (f.note ? '<div class="share-note">' + esc(f.note) + '</div>' : '') +
+        '<div class="share-mobile-meta">' + formatSize(f.size) + ' · ' +
+          (f.expires_at ? (expired ? '<span class="expire-badge">已过期</span>' : '') + ' 到期 ' + esc(shareDate(f.expires_at)) : '永久有效') +
+        '</div></td>' +
+      '<td>' + formatSize(f.size) + '</td>' +
+      '<td>' + esc(f.uploader || '—') + '</td>' +
+      '<td>' + esc(shareDate(f.created_at)) + '</td>' +
+      '<td>' + expireCell + '</td>' +
+      '<td class="col-actions share-actions">' + actions + '</td>' +
+    '</tr>';
+  }).join('');
+
+  body.querySelectorAll('[data-share-download]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      window.location.href = 'api/files.php?action=download&id=' + encodeURIComponent(btn.dataset.shareDownload);
+    });
+  });
+  body.querySelectorAll('[data-share-delete]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const file = SHARE.files.filter(function (f) { return String(f.id) === btn.dataset.shareDelete; })[0];
+      if (!file) return;
+      confirmDelete('文件「' + file.name + '」', async function () {
+        const res = await fetch('api/files.php', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'action=delete&id=' + encodeURIComponent(file.id)
+        });
+        const data = await res.json().catch(function () { return null; });
+        if (!data) { toast('文件服务返回了异常内容', 'error'); return false; }
+        if (!data.ok) { toast(data.error || '删除失败', 'error'); return false; }
+        toast('文件已删除', 'success');
+        SHARE.loaded = false;
+        await loadShareFiles(true);
+        return true;
+      });
+    });
+  });
+}
+
+function localDatetimeValue(date) {
+  const d = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return d.toISOString().slice(0, 16);
+}
+
+function openShareUpload() {
+  const minValue = localDatetimeValue(new Date(Date.now() + 60000));
+  openModal('上传文件',
+    '<form id="share-form" autocomplete="off">' +
+      '<div class="form-field"><label for="up-file">选择文件（最大 20MB）</label>' +
+        '<input id="up-file" class="file-input" type="file" required></div>' +
+      '<div class="form-field"><label for="up-note">文件说明</label>' +
+        '<textarea id="up-note" rows="3" maxlength="200" placeholder="例如：11 月部门考勤模板，供各部门填写后回传（最多 200 字）"></textarea></div>' +
+      '<div class="form-field"><label for="up-expires">到期时间（留空表示永久有效）</label>' +
+        '<input id="up-expires" type="datetime-local" min="' + minValue + '"></div>' +
+      '<div class="form-hint">到期后文件仍保留在服务器，但会标注「已过期」且无法下载；上传者本人或管理员可以删除。</div>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="btn btn-ghost" id="share-cancel">取消</button>' +
+        '<button type="submit" class="btn btn-primary">开始上传</button>' +
+      '</div>' +
+    '</form>');
+  $('#share-cancel').addEventListener('click', closeModal);
+  $('#share-form').addEventListener('submit', async function (ev) {
+    ev.preventDefault();
+    const input = $('#up-file');
+    const file = input.files && input.files[0];
+    if (!file) { toast('请选择要上传的文件', 'error'); return; }
+    if (file.size <= 0) { toast('不能上传空文件', 'error'); return; }
+    if (file.size > 20 * 1024 * 1024) { toast('文件超过 20MB 限制', 'error'); return; }
+    const fd = new FormData();
+    fd.append('action', 'upload');
+    fd.append('file', file);
+    fd.append('note', $('#up-note').value.trim());
+    fd.append('expires_at', $('#up-expires').value || '');
+    const btn = ev.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = '上传中…';
+    try {
+      const res = await fetch('api/files.php', { method: 'POST', credentials: 'same-origin', body: fd });
+      const data = await res.json().catch(function () { return null; });
+      if (!data) { toast('文件服务返回了异常内容', 'error'); }
+      else if (!data.ok) { toast(data.error || '上传失败', 'error'); }
+      else {
+        closeModal();
+        toast('文件已上传', 'success');
+        SHARE.loaded = false;
+        await loadShareFiles(true);
+        return;
+      }
+    } catch (e) {
+      toast('上传失败，请检查网络后重试', 'error');
+    }
+    btn.disabled = false;
+    btn.textContent = '开始上传';
   });
 }
 
@@ -1112,7 +1382,7 @@ const ROUTES = {
   approvals: { title: '流程审批', render: renderApprovals },
   hr: { title: '人事管理', render: renderHR },
   schedule: { title: '日程安排', render: renderSchedule },
-  docs: { title: '文档中心', render: renderDocs },
+  share: { title: '文件共享', render: renderShare },
   contacts: { title: '通讯录', render: renderContacts },
   mail: { title: '邮件', render: renderMail },
   security: { title: '安全防护 · DDoS 监控', render: renderSecurity },
@@ -1124,6 +1394,8 @@ function currentRoute() {
   return ROUTES[key] ? key : 'dashboard';
 }
 
+let routeAnimTimer = null;
+
 function navigate() {
   const key = currentRoute();
   document.querySelectorAll('#sidebar-nav .nav-item').forEach(function (a) {
@@ -1132,6 +1404,19 @@ function navigate() {
   $('#topbar-title').textContent = ROUTES[key].title;
   window.scrollTo(0, 0);
   ROUTES[key].render();
+
+  /* 路由切换动画：先移除再强制重排，保证同一路由重复进入也能重放 */
+  const content = $('#content');
+  content.classList.remove('route-enter');
+  void content.offsetWidth;
+  content.classList.add('route-enter');
+  clearTimeout(routeAnimTimer);
+  routeAnimTimer = setTimeout(function () { content.classList.remove('route-enter'); }, 560);
+
+  const title = $('#topbar-title');
+  title.classList.remove('title-enter');
+  void title.offsetWidth;
+  title.classList.add('title-enter');
 }
 
 /* ===================== 启动 ===================== */
@@ -1154,11 +1439,12 @@ function navigate() {
       return;
     }
     const btn = ev.target.querySelector('button[type="submit"]');
+    const btnHtml = btn.innerHTML;
     btn.disabled = true;
     btn.textContent = '登录中…';
     const res = await oaApi('login', { username: user, password: pass });
     btn.disabled = false;
-    btn.textContent = '登 录';
+    btn.innerHTML = btnHtml;
     if (!res.ok) {
       toast(res.error || '登录失败', 'error');
       $('#login-pass').value = '';

@@ -1,30 +1,33 @@
 <?php
 /**
- * oa/api/files.php —— 文档中心：文件共享 / 分发存储后端
+ * oa/api/files.php —— 文件共享：分发存储后端
  *
  * 存储位置（服务端 192.168.3.152，Web 根目录之外，只能经本接口下载）：
  *   /var/www/oa-share/files/            文件实体
- *   /var/www/oa-share/data/files.sqlite 元数据
+ *   /var/www/oa-share/data/files.sqlite 元数据（上传者、说明、到期时间、下载次数）
  *
- * API 契约：
+ * API 契约（均需登录 OA；未登录 401）：
  *   POST action=list                    -> {ok:true,data:{files:[],count,total_size}}
- *   POST action=upload (multipart file) -> {ok:true,data:{file:{...}}}
+ *   POST action=upload (multipart)      -> {ok:true,data:{file:{...}}}
+ *        file 文件；note 说明（≤200 字，可空）；expires_at 到期时间（Y-m-dTH:i，可空=永久）
  *   POST action=delete id               -> {ok:true,data:{message:"已删除"}}
  *   GET  action=download&id=N           -> 文件流（Content-Disposition: attachment）
  *
- * 权限：upload / delete 仅管理员可用（需 OA 会话 role=admin）；未登录 401、非管理员 403。
- *       list / download 保持只读开放。
+ * 权限：所有登录用户可上传；上传者本人可删除自己的文件，admin 可删除全部。
+ *       到期后的文件仍保留在服务器，但下载返回 410，列表标注“已过期”。
  * 运行环境：PHP 5.4（CentOS 7），不得使用 PHP7 语法
  */
 
 error_reporting(E_ALL & ~E_NOTICE & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 date_default_timezone_set('Asia/Shanghai');
+session_start();
 
 define('SHARE_ROOT', '/var/www/oa-share');
 define('SHARE_FILES', SHARE_ROOT . '/files');
 define('SHARE_DB', SHARE_ROOT . '/data/files.sqlite');
 define('MAX_FILE_SIZE', 20 * 1024 * 1024);
+define('MAX_NOTE_LEN', 200);
 
 // 任何未捕获异常都返回 JSON，避免前端收到 500 空响应后 JSON 解析报错
 set_exception_handler(function ($e) {
@@ -62,8 +65,21 @@ function files_db() {
         type TEXT,
         uploader TEXT,
         created_at TEXT NOT NULL,
-        downloads INTEGER NOT NULL DEFAULT 0
+        downloads INTEGER NOT NULL DEFAULT 0,
+        note TEXT,
+        expires_at TEXT
     )');
+    // 兼容旧库：早期版本没有 note / expires_at 两列
+    $cols = array();
+    foreach ($pdo->query('PRAGMA table_info(files)')->fetchAll(PDO::FETCH_ASSOC) as $c) {
+        $cols[$c['name']] = true;
+    }
+    if (!isset($cols['note'])) {
+        $pdo->exec('ALTER TABLE files ADD COLUMN note TEXT');
+    }
+    if (!isset($cols['expires_at'])) {
+        $pdo->exec('ALTER TABLE files ADD COLUMN expires_at TEXT');
+    }
     return $pdo;
 }
 
@@ -77,7 +93,41 @@ function out_error($message) {
     out_json(array('ok' => false, 'error' => $message));
 }
 
+function current_user() {
+    if (!isset($_SESSION['oa_user'])) {
+        http_response_code(401);
+        out_error('请先登录 OA 账号');
+    }
+    return (string) $_SESSION['oa_user'];
+}
+
+function current_role() {
+    $role = isset($_SESSION['oa_role']) ? (string) $_SESSION['oa_role'] : '';
+    if ($role === '') {
+        $user = strtolower((string) $_SESSION['oa_user']);
+        $role = (strpos($user, 'admin@') === 0) ? 'admin' : 'user';
+    }
+    return $role;
+}
+
+/* 上传者本人或管理员可删除 */
+function share_can_delete($row, $user) {
+    if (strcasecmp((string) $row['uploader'], $user) === 0) {
+        return true;
+    }
+    return current_role() === 'admin';
+}
+
+function share_expired($expires_at) {
+    if ($expires_at === null || $expires_at === '') {
+        return false;
+    }
+    $ts = strtotime((string) $expires_at);
+    return $ts !== false && $ts <= time();
+}
+
 function file_row($row) {
+    $expired = share_expired($row['expires_at']);
     return array(
         'id' => (int) $row['id'],
         'name' => $row['name'],
@@ -85,8 +135,30 @@ function file_row($row) {
         'type' => $row['type'],
         'uploader' => $row['uploader'],
         'created_at' => $row['created_at'],
-        'downloads' => (int) $row['downloads']
+        'downloads' => (int) $row['downloads'],
+        'note' => isset($row['note']) ? (string) $row['note'] : '',
+        'expires_at' => isset($row['expires_at']) ? (string) $row['expires_at'] : '',
+        'expired' => $expired
     );
+}
+
+/* 客户端 datetime-local 传 2026-12-01T18:00；也兼容 2026-12-01 18:00(:ss) */
+function norm_expires_at($raw) {
+    $raw = trim((string) $raw);
+    if ($raw === '') {
+        return '';
+    }
+    $raw = str_replace('T', ' ', $raw);
+    if (preg_match('/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2})(:\d{2})?$/', $raw, $m)) {
+        $raw = $m[1];
+    } else {
+        return null;
+    }
+    $ts = strtotime($raw . ':00');
+    if ($ts === false) {
+        return null;
+    }
+    return date('Y-m-d H:i', $ts);
 }
 
 $action = '';
@@ -96,30 +168,9 @@ if (isset($_POST['action'])) {
     $action = $_GET['action'];
 }
 
-/* 写操作（上传/删除）仅管理员可用；列表/下载保持只读开放 */
-function share_require_admin() {
-    if (!isset($_SESSION['oa_user'])) {
-        http_response_code(401);
-        out_error('请先登录 OA 账号');
-    }
-    $role = isset($_SESSION['oa_role']) ? (string) $_SESSION['oa_role'] : '';
-    if ($role === '') {
-        $user = strtolower((string) $_SESSION['oa_user']);
-        $role = (strpos($user, 'admin@') === 0) ? 'admin' : 'user';
-    }
-    if ($role !== 'admin') {
-        http_response_code(403);
-        out_error('仅管理员可上传或删除文件');
-    }
-    return (string) $_SESSION['oa_user'];
-}
-
-if ($action === 'upload' || $action === 'delete') {
-    session_start();
-}
-
 /* ---------- 下载：直接输出文件流，不进入 JSON 分支 ---------- */
 if ($action === 'download') {
+    $user = current_user();
     $id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
     $stmt = files_db()->prepare('SELECT * FROM files WHERE id = ?');
     $stmt->execute(array($id));
@@ -127,6 +178,10 @@ if ($action === 'download') {
     if (!$row) {
         http_response_code(404);
         out_error('文件不存在或已被删除');
+    }
+    if (share_expired($row['expires_at'])) {
+        http_response_code(410);
+        out_error('文件已过期（' . $row['expires_at'] . '），无法下载');
     }
     $path = SHARE_FILES . '/' . basename($row['stored']);
     if (!is_file($path)) {
@@ -147,7 +202,9 @@ if ($action === 'download') {
     exit;
 }
 
-/* ---------- 以下为 JSON 接口 ---------- */
+/* ---------- 以下为 JSON 接口，统一要求登录 ---------- */
+$current = current_user();
+
 switch ($action) {
     case 'list':
         $rows = files_db()->query('SELECT * FROM files ORDER BY id DESC')
@@ -166,10 +223,23 @@ switch ($action) {
         break;
 
     case 'upload':
-        $uploader = share_require_admin();
         if (!isset($_FILES['file'])) {
             out_error('未接收到文件');
         }
+        $note = isset($_POST['note']) ? trim((string) $_POST['note']) : '';
+        if (function_exists('mb_strlen')) {
+            if (mb_strlen($note, 'UTF-8') > MAX_NOTE_LEN) {
+                out_error('说明最多 ' . MAX_NOTE_LEN . ' 个字');
+            }
+        } elseif (strlen($note) > MAX_NOTE_LEN * 3) {
+            out_error('说明最多 ' . MAX_NOTE_LEN . ' 个字');
+        }
+        $expires_raw = isset($_POST['expires_at']) ? $_POST['expires_at'] : '';
+        $expires_at = norm_expires_at($expires_raw);
+        if ($expires_at === null) {
+            out_error('到期时间格式不正确（示例：2026-12-01 18:00）');
+        }
+
         $file = $_FILES['file'];
         if ($file['error'] !== UPLOAD_ERR_OK) {
             $errors = array(
@@ -208,35 +278,43 @@ switch ($action) {
             out_error('保存文件失败，请检查服务端目录权限');
         }
         @chmod($dest, 0644);
-        /* uploader 取自当前管理员会话，不接受前端伪造 */
+        /* uploader 取自会话，不接受前端伪造 */
         $now = date('Y-m-d H:i:s');
         $pdo = files_db();
         try {
-            $pdo->prepare('INSERT INTO files (name, stored, size, type, uploader, created_at, downloads) VALUES (?, ?, ?, ?, ?, ?, 0)')
-                ->execute(array($orig, $stored, (int) $file['size'], $ext, $uploader, $now));
+            $pdo->prepare('INSERT INTO files (name, stored, size, type, uploader, created_at, downloads, note, expires_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)')
+                ->execute(array($orig, $stored, (int) $file['size'], $ext, $current, $now, $note, $expires_at));
         } catch (PDOException $e) {
             @unlink($dest);          // 入库失败就别留孤儿文件
             out_error('写入数据库失败：' . $e->getMessage());
         }
-        out_json(array('ok' => true, 'data' => array('file' => array(
+        $new = array(
             'id' => (int) $pdo->lastInsertId(),
             'name' => $orig,
+            'stored' => $stored,
             'size' => (int) $file['size'],
             'type' => $ext,
-            'uploader' => $uploader,
+            'uploader' => $current,
             'created_at' => $now,
-            'downloads' => 0
-        ))));
+            'downloads' => 0,
+            'note' => $note,
+            'expires_at' => $expires_at
+        );
+        out_json(array('ok' => true, 'data' => array('file' => file_row($new))));
         break;
 
     case 'delete':
-        share_require_admin();
         $id = isset($_POST['id']) ? (int) $_POST['id'] : 0;
         $stmt = files_db()->prepare('SELECT * FROM files WHERE id = ?');
         $stmt->execute(array($id));
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$row) {
+            http_response_code(404);
             out_error('文件不存在或已被删除');
+        }
+        if (!share_can_delete($row, $current)) {
+            http_response_code(403);
+            out_error('只能删除自己上传的文件');
         }
         $path = SHARE_FILES . '/' . basename($row['stored']);
         if (is_file($path)) {

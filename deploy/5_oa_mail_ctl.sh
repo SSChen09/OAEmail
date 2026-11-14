@@ -115,14 +115,23 @@ check_up() {
     curl -s -m 5 -X POST -d 'action=me' -H "Host: $MAIL_DOMAIN" http://127.0.0.1/api/mail.php 2>/dev/null | $PYBIN -c 'import sys,json; d=json.load(sys.stdin); assert "ok" in d' >/dev/null 2>&1 \
         && vok "webmail API 响应正常 (api/mail.php)" \
         || vfail "webmail API 无响应（php-fpm / nginx fastcgi）"
-    curl -s -m 5 -X POST -d 'action=list' -H "Host: $MAIL_DOMAIN" http://127.0.0.1/api/files.php 2>/dev/null | grep -q '"ok":true' \
-        && vok "文件共享 API 响应正常 (api/files.php)" \
-        || vfail "文件共享 API 无响应"
+    code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -X POST -d 'action=list' -H "Host: $MAIL_DOMAIN" http://127.0.0.1/api/files.php 2>/dev/null)
+    if [ "$code" = "401" ]; then
+        vok "文件共享 API 未登录 401 (api/files.php)"
+    else
+        vfail "文件共享 API 异常（未登录 HTTP ${code:-无响应}）"
+    fi
     code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -H "Host: $MAIL_DOMAIN" "http://127.0.0.1/api/content.php?action=data" 2>/dev/null)
     if [ "$code" = "401" ]; then
         vok "公告/日程接口未登录 401 (api/content.php)"
     else
         vfail "公告/日程接口异常（未登录 HTTP ${code:-无响应}）"
+    fi
+    code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -H "Host: $MAIL_DOMAIN" "http://127.0.0.1/api/todos.php?action=list" 2>/dev/null)
+    if [ "$code" = "401" ]; then
+        vok "个人待办接口未登录 401 (api/todos.php)"
+    else
+        vfail "个人待办接口异常（未登录 HTTP ${code:-无响应}）"
     fi
     code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -X POST -d 'action=me' -H "Host: $MAIL_DOMAIN" http://127.0.0.1/api/auth.php 2>/dev/null)
     if [ "$code" = "401" ]; then
@@ -130,7 +139,7 @@ check_up() {
     else
         vfail "OA 登录接口异常（HTTP ${code:-无响应}）"
     fi
-    # 角色权限：admin 登录返回管理员角色；文档上传未登录必须 401
+    # 角色权限：admin 登录返回管理员角色；文件上传未登录必须 401
     if curl -s -m 5 -X POST -d "action=login&username=admin@ddzt.old&password=$ADMINPASS" -H "Host: $MAIL_DOMAIN" http://127.0.0.1/api/auth.php 2>/dev/null | grep -q '"role":"admin"'; then
         vok "OA 登录返回管理员角色（admin）"
     else
@@ -138,9 +147,9 @@ check_up() {
     fi
     code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -X POST -d 'action=upload' -H "Host: $MAIL_DOMAIN" http://127.0.0.1/api/files.php 2>/dev/null)
     if [ "$code" = "401" ]; then
-        vok "文档上传未登录被拒绝（401，仅管理员可写）"
+        vok "文件上传未登录被拒绝（401）"
     else
-        vfail "文档上传权限异常（未登录 HTTP ${code:-无响应}）"
+        vfail "文件上传权限异常（未登录 HTTP ${code:-无响应}）"
     fi
     # OA 登录后应自动建立邮箱会话（同一套账号口令）
     _jar=$(mktemp)
@@ -155,6 +164,11 @@ check_up() {
         vok "公告/日程接口登录后可读 (api/content.php)"
     else
         vfail "公告/日程接口读取失败（检查 /var/www/oa-data 权限）"
+    fi
+    if curl -s -m 5 -b "$_jar" -H "Host: $MAIL_DOMAIN" "http://127.0.0.1/api/todos.php?action=list" 2>/dev/null | grep -q '"todos"'; then
+        vok "个人待办接口登录后可读 (api/todos.php)"
+    else
+        vfail "个人待办接口读取失败（检查 /var/www/oa-data 权限）"
     fi
     code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -b "$_jar" -X POST -d 'action=notice_save&title=x&dept=x&date=2026-01-01' -H "Host: $MAIL_DOMAIN" http://127.0.0.1/api/content.php 2>/dev/null)
     if [ "$code" = "403" ]; then
@@ -177,6 +191,8 @@ check_up() {
         || vfail "缺少 /var/www/oa/api/content.php（重跑 4_oa_mail_setup.sh）"
     [ -f /var/www/oa-data/content.json ] && vok "公告/日程数据文件存在" \
         || vfail "缺少 /var/www/oa-data/content.json（重跑 4_oa_mail_setup.sh）"
+    [ -f /var/www/oa/api/todos.php ] && vok "个人待办后端文件存在" \
+        || vfail "缺少 /var/www/oa/api/todos.php（重跑 4_oa_mail_setup.sh）"
     say "-- [邮件链路] --"
     env IMAP_USER="eva@$MAIL_DOMAIN" IMAP_PASS="$EVAPASS" "$PYBIN" -c "import os,imaplib; M=imaplib.IMAP4('127.0.0.1'); M.login(os.environ['IMAP_USER'], os.environ['IMAP_PASS']); print('IMAP_OK')" >/dev/null 2>&1 \
         && vok "IMAP 登录 eva@$MAIL_DOMAIN 可用（dovecot）" \

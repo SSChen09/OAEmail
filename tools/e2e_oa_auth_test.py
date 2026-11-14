@@ -93,7 +93,9 @@ def main():
         r = sess.post(MAIL_BASE, data={"action": "me"})
         check(not r.json().get("ok"), "%s 退出后邮箱会话同时失效" % user)
 
-    # 文档中心写权限：未登录 401、普通账号 403、管理员 200
+    # 文件共享权限：未登录一律 401；所有登录用户可上传，本人可删自己的，admin 可删全部
+    r = requests.post(FILES_BASE, data={"action": "list"})
+    check(r.status_code == 401, "未登录读取文件列表返回 401")
     r = requests.post(FILES_BASE, data={"action": "delete", "id": 1})
     check(r.status_code == 401, "未登录删除文件返回 401")
     r = requests.post(FILES_BASE, data={"action": "upload"},
@@ -102,26 +104,48 @@ def main():
 
     eva = requests.Session()
     call(eva, "login", username="eva@ddzt.old", password="rei")
-    r = eva.post(FILES_BASE, data={"action": "upload"},
-                 files={"file": ("eva.txt", b"x", "text/plain")})
-    check(r.status_code == 403 and "仅管理员" in r.json().get("error", ""),
-          "普通账号上传文件被拒绝（403）")
-    r = eva.post(FILES_BASE, data={"action": "delete", "id": 1})
-    check(r.status_code == 403, "普通账号删除文件被拒绝（403）")
+    r = eva.post(FILES_BASE, data={"action": "upload", "note": "eva 的共享说明", "expires_at": ""},
+                 files={"file": ("eva-share.txt", b"eva upload ok", "text/plain")})
+    body = r.json()
+    check(r.status_code == 200 and body.get("ok"), "普通账号 eva 上传文件成功")
+    eva_file = body.get("data", {}).get("file", {})
+    eva_id = eva_file.get("id")
+    check(eva_file.get("uploader") == "eva@ddzt.old", "上传者记录为 eva@ddzt.old")
+    check(eva_file.get("note") == "eva 的共享说明", "文件说明已保存")
+    check(eva_file.get("expires_at") == "" and eva_file.get("expired") is False, "未设置到期时间时为永久有效")
 
     adm = requests.Session()
     call(adm, "login", username="admin@ddzt.old", password="admin")
-    r = adm.post(FILES_BASE, data={"action": "upload"},
-                 files={"file": ("admin-only.txt", b"admin upload ok", "text/plain")})
+    r = adm.post(FILES_BASE, data={"action": "upload", "note": "管理员文件"},
+                 files={"file": ("admin-share.txt", b"admin upload ok", "text/plain")})
     body = r.json()
     check(r.status_code == 200 and body.get("ok"), "管理员上传文件成功")
-    f = body.get("data", {}).get("file", {})
-    fid = f.get("id")
-    check(f.get("uploader") == "admin@ddzt.old", "上传记录的 uploader 为当前管理员")
-    r = adm.post(FILES_BASE, data={"action": "delete", "id": fid})
-    check(r.status_code == 200 and r.json().get("ok"), "管理员删除文件成功")
-    rows = adm.post(FILES_BASE, data={"action": "list"}).json().get("data", {}).get("files", [])
-    check(all(item.get("id") != fid for item in rows), "删除后文件不再出现在列表中")
+    adm_file = body.get("data", {}).get("file", {})
+    adm_id = adm_file.get("id")
+    check(adm_file.get("uploader") == "admin@ddzt.old", "上传记录的 uploader 为当前管理员")
+
+    r = eva.post(FILES_BASE, data={"action": "delete", "id": adm_id})
+    check(r.status_code == 403 and "只能删除自己" in r.json().get("error", ""),
+          "普通账号不能删除他人的文件（403）")
+    r = eva.post(FILES_BASE, data={"action": "delete", "id": eva_id})
+    check(r.status_code == 200 and r.json().get("ok"), "上传者可以删除自己的文件")
+    r = adm.post(FILES_BASE, data={"action": "delete", "id": adm_id})
+    check(r.status_code == 200, "管理员可以删除任意文件")
+
+    # 到期时间：允许设置过去时间，列表标注过期且下载返回 410
+    r = eva.post(FILES_BASE, data={"action": "upload", "note": "已过期测试", "expires_at": "2020-01-01T00:00"},
+                 files={"file": ("expired.txt", b"expired", "text/plain")})
+    body = r.json()
+    exp = body.get("data", {}).get("file", {})
+    exp_id = exp.get("id")
+    check(r.status_code == 200 and exp.get("expires_at") == "2020-01-01 00:00", "到期时间按分钟保存")
+    check(exp.get("expired") is True, "过去时间上传后立即标记过期")
+    r = eva.get(FILES_BASE, params={"action": "download", "id": exp_id})
+    check(r.status_code == 410, "过期文件下载返回 410")
+    rows = eva.post(FILES_BASE, data={"action": "list"}).json().get("data", {}).get("files", [])
+    row = [x for x in rows if x.get("id") == exp_id]
+    check(bool(row) and row[0].get("expired") is True, "列表返回过期标记")
+    eva.post(FILES_BASE, data={"action": "delete", "id": exp_id})
 
     r = s.get(BASE, params={"action": "login", "username": "eva@ddzt.old", "password": "rei"})
     check(r.status_code == 405, "login 拒绝 GET 请求")

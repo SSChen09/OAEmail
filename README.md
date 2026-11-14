@@ -37,11 +37,11 @@
 ├── 配置.md                       各成员分管的机器与服务（IP 以 netenv.json 为准）
 ├── netenv.json                   三台 IP 的唯一事实来源（角色→IP、网段、SSH 口令、域名）
 ├── oa/                           OA 系统源码
-│   ├── index.html                  单页前端（10 个模块；邮件/文档中心/公告/日程/安全防护为真实功能）
-│   ├── static/app.js               前端逻辑 + 演示数据；公告/日程走 content.php，安全防护页内嵌 DDoS 面板
+│   ├── index.html                  单页前端（10 个模块；邮件/文件共享/公告/日程/个人待办/安全防护为真实功能）
+│   ├── static/app.js               前端逻辑 + 演示数据；公告/日程走 content.php，个人待办走 todos.php，安全防护页内嵌 DDoS 面板
 │   ├── static/style.css
 │   └── api/                        auth.php（登录/角色）、users.php（账号）、mail.php（webmail）、
-│                                   files.php（文件共享）、content.php（公告/日程）
+│                                   files.php（文件共享）、content.php（公告/日程）、todos.php（个人待办）
 ├── ddos/                         DDoS 模拟与防护系统（详见 ddos/README.md）
 │   ├── target/                     靶机 152：agent.py（采集/检测/封禁/Flask API）、index.html
 │   │                                 面板、nginx 日志片段、systemd 单元、1_setup_target.sh、
@@ -71,6 +71,7 @@
 │   ├── e2e_mail_test.py            邮件全流程端到端验收（登录→收→读→发→删→附件往返）
 │   ├── e2e_oa_auth_test.py         OA 登录/角色/文件写权限端到端验收
 │   ├── e2e_content_test.py         公告/日程增删改与权限端到端验收
+│   ├── e2e_share_test.py           文件共享：上传者/说明/到期/权限/下载端到端验收
 │   └── smtp_probe.py               LAN 直连 25 端口无认证发信验证
 ├── _pycompat.py / _py2lint.py    开发辅助：Python 3.6 语法兼容性检查
 └── 比赛/                          赛场机器备份 zip（backup_130 / backup_232，不入 git）
@@ -82,18 +83,24 @@
 
 ### 3.1 OA 系统 + 邮件系统 + 文件共享（`oa/` + `deploy/4_oa_mail_setup.sh`）
 
-- **OA 前端**：单页 10 模块（工作台 / 公告 / 流程审批 / 人事 / 日程 / 文档中心 / 通讯录 / 邮件 / 安全防护 / 系统设置）。
-  其中**邮件**、**文档中心**、**公告通知**与**日程安排**为真实功能（公告/日程数据落盘到服务器），其余为前端演示。
+- **OA 前端**：单页 10 模块（工作台 / 公告 / 流程审批 / 人事 / 日程 / 文件共享 / 通讯录 / 邮件 / 安全防护 / 系统设置）。
+  其中**邮件**、**文件共享**、**公告通知**、**日程安排**与**个人待办**为真实功能（数据落盘到服务器），其余为前端演示。
   门户登录为**服务端会话认证**（`oa/api/auth.php`，bcrypt 存密码），账号见第 7 节。
 - **OA 账号**：登录页走 `api/auth.php` 服务端会话（`login` / `me` / `logout`），
   **登录账号就是邮箱地址**：`eva@ddzt.old/rei`、`kk@ddzt.old/zmjjkk`、`admin@ddzt.old/admin`；
   短账号 `eva` 不再接受，非 `ddzt.old` 域一律拒绝。密码只存 bcrypt 哈希，错误口令返回 401，退出销毁会话。
   账号表在 `oa/api/users.php`。
-- **修改权限**：仅 `admin@ddzt.old` 可修改/保存 OA 内容（公告与日程的新增/编辑/删除、审批通过/驳回、待办勾选、文档上传/删除）；
-  `eva@`、`kk@` 为只读账号，页面顶部标「只读用户」，相关按钮禁用并提示“仅管理员可操作”。
-  `auth.php` 的 `me`/`login` 返回 `role`；`files.php` 与 `content.php` 的写操作在服务端二次校验角色（未登录 401、非管理员 403）。
+- **修改权限**：`admin@ddzt.old` 可维护公告与日程（新增/编辑/删除）并审批；
+  **个人待办每个账号独立**，所有登录用户都能添加/编辑/删除自己的待办，管理员也不能修改他人的待办；
+  `eva@`、`kk@` 为普通账号，页面顶部标「普通用户」，公告/日程/审批按钮禁用并提示“仅管理员可操作”。
+  文件共享另外放开：所有登录用户都能上传，上传者本人或管理员可删除。
+  `auth.php` 的 `me`/`login` 返回 `role`；`content.php` 的写操作在服务端二次校验角色（未登录 401、非管理员 403），
+  `files.php` 校验登录态与文件归属，`todos.php` 只允许读写本人待办。
 - **公告通知 / 日程安排**：数据存 `/var/www/oa-data/content.json`（首次部署用 `oa/api/content_defaults.json` 初始化，重跑保留）；
   所有登录用户可读，仅管理员可新增/编辑/删除；API `/api/content.php`（`data` / `notice_save` / `notice_delete` / `schedule_save` / `schedule_delete`）。
+- **个人待办**：每个账号独立，数据存 `/var/www/oa-data/todos.sqlite`；首次访问自动生成 8 条默认待办；
+  登录用户只能查看/添加/编辑/删除自己的待办（管理员也不能改他人的），工作台统计卡显示未完成数量；
+  API `/api/todos.php`（`list` / `save` / `delete`，全部要求登录；操作他人待办按 404 处理）。
 - **邮件系统**（完整可用）：
   - 后端 postfix（投递，`home_mailbox = Maildir/`）+ dovecot（IMAP 读取）；
     Webmail 后端 `oa/api/mail.php`：php-imap 读 Dovecot + fsockopen SMTP 发 Postfix（PHP 5.4 兼容）。
@@ -103,8 +110,11 @@
     发件副本自动存入 `Sent`（已发送）箱，目录栏可切换「收件箱 / 已发送」。
   - Thunderbird 直连：IMAP `192.168.3.152:143`（明文认证）、SMTP `192.168.3.152:25`（LAN 无认证放行）。
   - API 契约（`/api/mail.php`：me / login / logout / list / read / send / delete / attachment）见 [使用文档.md](使用文档.md) 第五节。
-- **文档中心（文件共享）**：上传（≤20MB、禁可执行扩展名）/ 下载（强制 attachment）/ 删除；
-  **上传与删除仅管理员可用**，普通账号只能下载；存储 `/var/www/oa-share/`（实体 files/ + 元数据 data/files.sqlite）；API `/api/files.php`。
+- **文件共享**：任何登录用户可上传（≤20MB、禁可执行扩展名），可填写说明（≤200 字）与到期时间（留空=永久）；
+  列表显示文件大小、上传者、上传时间、说明和到期时间；到期后文件保留但**禁止下载**并标注「已过期」；
+  上传者本人可删除自己的文件，管理员可删除任意文件。下载强制 `attachment`。
+  存储 `/var/www/oa-share/`（实体 `files/` + 元数据 `data/files.sqlite`）；API `/api/files.php`
+  （`list` / `upload` / `download` / `delete`，全部要求登录）。
 
 ### 3.2 DDoS 模拟与防护（`ddos/`，需求规格见 [ddos.md](ddos.md)）
 
@@ -125,7 +135,9 @@
 - `deploy/`：1~3 号脚本装系统依赖（幂等、`--check` 只读校验、PASS/FAIL/WARN 汇总、FAIL 退出码非 0），
   4 号部署 OA+邮件业务，5 号一键启停。环境变量 `SERVER_IP / CLIENT_IP / ATTACKER_IP / MAIL_DOMAIN / NO_FIREWALL_CHANGE / PIP_INDEX` 可覆盖默认值。
 - `tools/`（Windows 侧）：`push_deploy.py` 一键全传全部署；`push_ddos.py` 分发 DDoS 项目；
-  `ssh_run.py` 远程命令/传文件；`e2e_mail_test.py`、`e2e_oa_auth_test.py`、`e2e_content_test.py`、`smtp_probe.py` 验收测试。
+  `ssh_run.py` 远程命令/传文件；`preview_oa.py` 本地预览 OA（静态取本地 `oa/`，API 与 `/ddos/` 代理到 152）；
+  `e2e_mail_test.py`、`e2e_oa_auth_test.py`、`e2e_content_test.py`、`e2e_share_test.py`、`e2e_todos_test.py`、`smtp_probe.py` 验收测试。
+- 本地改前端预览：`python tools/preview_oa.py` → <http://127.0.0.1:8123/>（不用本地装 PHP，登录/数据仍走 152）。
 - `netlab/`：`ssh2` 批量探测/执行（`node probe.mjs <ip…>` / `node run.mjs "<cmd>" <ip…>`），
   以及 yum/pip 阿里云镜像源统一与检查脚本。
 
@@ -178,7 +190,7 @@ curl -X POST http://192.168.3.152:5000/api/auto -H 'Content-Type: application/js
 | 邮件全流程 | `python3 /root/test/e2e_mail_test.py` | 154 | `E2E_MAIL_TEST_ALL_PASS` |
 | OA 登录与权限 | `python3 /root/test/tools/e2e_oa_auth_test.py` | 154 | `E2E_OA_AUTH_ALL_PASS`（三角色、文件写权限 401/403） |
 | 公告/日程 CRUD | `python3 /root/test/tools/e2e_content_test.py` | 154 | `E2E_CONTENT_TEST_ALL_PASS`（管理员增删改、普通账号 403、落盘） |
-| 文件共享全流程 | `bash /root/test/tools/test_share.sh` | 152 | 上传/下载 md5 一致、21MB 被拒 |
+| 文件共享全流程 | `python3 /root/test/tools/e2e_share_test.py` | 152 | `E2E_SHARE_TEST_ALL_PASS`（说明/到期/归属删除/过期 410） |
 | 跨端下载 | `python3 /root/test/tools/test_clients.py` | 152 | 154/153 下载成功 |
 | 终检汇总 | `python3 /root/test/tools/final_check.py` | 152 | 各项正常 |
 | SMTP 直连发信 | `python3 tools\smtp_probe.py`（上传至 154 跑） | 154 | `SMTP_RELAY_OK` |
